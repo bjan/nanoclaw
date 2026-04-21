@@ -1,13 +1,12 @@
 /**
  * Container Runner for NanoClaw
- * Spawns agent execution in containers and handles IPC
+ * Spawns agent execution natively (no container) and handles IPC
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import {
-  CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   DATA_DIR,
@@ -19,14 +18,9 @@ import {
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import {
-  CONTAINER_RUNTIME_BIN,
-  hostGatewayArgs,
-  readonlyMountArgs,
-  stopContainer,
-} from './container-runtime.js';
+import { resolveGroupModelConfig } from './models.js';
+import { getGroupEffort, isGroupPlanMode, clearGroupPlanMode } from './channels/telegram.js';
 import { OneCLI } from '@onecli-sh/sdk';
-import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
@@ -53,90 +47,26 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
-  hostPath: string;
-  containerPath: string;
-  readonly: boolean;
-}
-
-function buildVolumeMounts(
+/**
+ * Prepare the group's session directory, IPC dirs, and agent-runner build.
+ * Returns the environment variables and paths needed to spawn the agent natively.
+ */
+function prepareAgentEnvironment(
   group: RegisteredGroup,
   isMain: boolean,
-): VolumeMount[] {
-  const mounts: VolumeMount[] = [];
+): { env: Record<string, string | undefined>; cwd: string; entrypoint: string } {
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
+  const globalDir = path.join(GROUPS_DIR, 'global');
+  const groupIpcDir = resolveGroupIpcPath(group.folder);
 
-  if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (store, group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
-    mounts.push({
-      hostPath: projectRoot,
-      containerPath: '/workspace/project',
-      readonly: true,
-    });
+  // Ensure directories exist
+  fs.mkdirSync(groupDir, { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
-
-    // Main gets writable access to the store (SQLite DB) so it can
-    // query and write to the database directly.
-    const storeDir = path.join(projectRoot, 'store');
-    mounts.push({
-      hostPath: storeDir,
-      containerPath: '/workspace/project/store',
-      readonly: false,
-    });
-
-    // Main also gets its group folder as the working directory
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory — writable for main so it can update shared context
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: false,
-      });
-    }
-  } else {
-    // Other groups only get their own folder
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory (read-only for non-main)
-    // Only directory mounts are supported, not file mounts
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: true,
-      });
-    }
-  }
-
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
+  // Per-group Claude sessions directory
   const groupSessionsDir = path.join(
     DATA_DIR,
     'sessions',
@@ -144,154 +74,74 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
+
+  // Symlink real OAuth credentials into per-group config dir so the SDK can authenticate
+  const realCredentials = path.join(process.env.HOME || '', '.claude', '.credentials.json');
+  const groupCredentials = path.join(groupSessionsDir, '.credentials.json');
+  if (fs.existsSync(realCredentials) && !fs.existsSync(groupCredentials)) {
+    try {
+      fs.symlinkSync(realCredentials, groupCredentials);
+    } catch {
+      // If symlink fails (e.g. already exists as file), copy instead
+      try { fs.copyFileSync(realCredentials, groupCredentials); } catch { /* ignore */ }
+    }
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const settingsFile = path.join(groupSessionsDir, 'settings.json');
+  // Always rewrite settings to keep model preference in sync
+  const settingsObj: Record<string, unknown> = {
+    env: {
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+    },
+  };
+  // Apply Anthropic model preference (non-baseUrl models use settings, not env override)
+  const groupModelConfig = resolveGroupModelConfig(group.folder);
+  if (groupModelConfig && !groupModelConfig.baseUrl) {
+    settingsObj.model = groupModelConfig.id;
+  }
+  fs.writeFileSync(settingsFile, JSON.stringify(settingsObj, null, 2) + '\n');
+
+  // Sync skills into each group's .claude/skills/ from three sources.
+  // Later sources override earlier ones (per-group wins over global).
   const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
+  const skillSources = [
+    path.join(projectRoot, 'skills'),               // global
+    path.join(groupDir, 'skills'),                   // per-group
+  ];
+  for (const skillsSrc of skillSources) {
+    if (!fs.existsSync(skillsSrc)) continue;
+    for (const entry of fs.readdirSync(skillsSrc)) {
+      const srcDir = path.join(skillsSrc, entry);
       if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
+      const dstDir = path.join(skillsDst, entry);
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
-    readonly: false,
-  });
 
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
-  mounts.push({
-    hostPath: groupIpcDir,
-    containerPath: '/workspace/ipc',
-    readonly: false,
-  });
+  // Build the agent-runner if needed
+  const agentRunnerDir = path.join(projectRoot, 'container', 'agent-runner');
+  const agentRunnerDist = path.join(agentRunnerDir, 'dist');
+  const entrypoint = path.join(agentRunnerDist, 'index.js');
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
-  if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-    }
-  }
-  mounts.push({
-    hostPath: groupAgentRunnerDir,
-    containerPath: '/app/src',
-    readonly: false,
-  });
+  // Extra mount dirs (if any)
+  const extraDir = path.join(groupDir, 'extra');
 
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
-  if (group.containerConfig?.additionalMounts) {
-    const validatedMounts = validateAdditionalMounts(
-      group.containerConfig.additionalMounts,
-      group.name,
-      isMain,
-    );
-    mounts.push(...validatedMounts);
-  }
+  // Build env for the native agent process
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    TZ: TIMEZONE,
+    HOME: groupSessionsDir.replace(/\/.claude$/, ''),
+    CLAUDE_CONFIG_DIR: groupSessionsDir,
+    NANOCLAW_IPC_DIR: groupIpcDir,
+    NANOCLAW_GROUP_DIR: groupDir,
+    NANOCLAW_GLOBAL_DIR: globalDir,
+    NANOCLAW_EXTRA_DIR: extraDir,
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
+  };
 
-  return mounts;
-}
-
-async function buildContainerArgs(
-  mounts: VolumeMount[],
-  containerName: string,
-  agentIdentifier?: string,
-): Promise<string[]> {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
-
-  // Pass host timezone so container's local time matches the user's
-  args.push('-e', `TZ=${TIMEZONE}`);
-
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
-  }
-
-  // Runtime-specific args for host gateway resolution
-  args.push(...hostGatewayArgs());
-
-  // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
-  const hostUid = process.getuid?.();
-  const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
-    args.push('-e', 'HOME=/home/node');
-  }
-
-  for (const mount of mounts) {
-    if (mount.readonly) {
-      args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
-    } else {
-      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
-    }
-  }
-
-  args.push(CONTAINER_IMAGE);
-
-  return args;
+  return { env, cwd: groupDir, entrypoint };
 }
 
 export async function runContainerAgent(
@@ -302,51 +152,86 @@ export async function runContainerAgent(
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
-  const groupDir = resolveGroupFolderPath(group.folder);
-  fs.mkdirSync(groupDir, { recursive: true });
-
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const { env: agentEnv, cwd, entrypoint } = prepareAgentEnvironment(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
+
+  // Inject IPC env vars for the MCP server
+  agentEnv.NANOCLAW_CHAT_JID = input.chatJid;
+  agentEnv.NANOCLAW_GROUP_FOLDER = input.groupFolder;
+  agentEnv.NANOCLAW_IS_MAIN = input.isMain ? '1' : '0';
+
+  // Apply OneCLI credentials to env via getContainerConfig
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  try {
+    const config = await onecli.getContainerConfig(agentIdentifier);
+    if (config?.env) {
+      Object.assign(agentEnv, config.env);
+      // Write CA cert to a temp file if provided
+      if (config.caCertificate) {
+        const certPath = path.join(DATA_DIR, 'sessions', group.folder, 'onecli-ca.pem');
+        fs.writeFileSync(certPath, config.caCertificate);
+        agentEnv.NODE_EXTRA_CA_CERTS = certPath;
+      }
+      logger.info({ containerName }, 'OneCLI credentials applied to env');
+    }
+  } catch {
+    logger.warn(
+      { containerName },
+      'OneCLI gateway not reachable — agent will have no credentials',
+    );
+  }
 
-  logger.debug(
-    {
-      group: group.name,
-      containerName,
-      mounts: mounts.map(
-        (m) =>
-          `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-      ),
-      containerArgs: containerArgs.join(' '),
-    },
-    'Container mount configuration',
-  );
+  // Apply per-group model override (set via /model command)
+  // Only override env vars for non-Anthropic models (those with a custom baseUrl).
+  // For Anthropic models, let the SDK use its default OAuth flow and model selection.
+  const modelConfig = resolveGroupModelConfig(group.folder);
+  if (modelConfig?.baseUrl) {
+    agentEnv.ANTHROPIC_BASE_URL = modelConfig.baseUrl;
+    agentEnv.ANTHROPIC_MODEL = modelConfig.id;
+    if (modelConfig.apiKey) {
+      agentEnv.ANTHROPIC_API_KEY = modelConfig.apiKey;
+    }
+    logger.info(
+      { containerName, model: modelConfig.id, baseUrl: modelConfig.baseUrl },
+      'Model override applied (custom endpoint)',
+    );
+  }
+
+  // Apply per-group effort level (set via /effort Telegram command)
+  const effort = getGroupEffort(group.folder);
+  if (effort) {
+    agentEnv.NANOCLAW_EFFORT = effort;
+  }
+
+  // Apply plan mode prefix (set via /plan Telegram command)
+  if (isGroupPlanMode(group.folder)) {
+    input.prompt = `[PLAN MODE] Think step by step. Present a detailed plan before executing anything. Explain what you will do and why, then ask for confirmation before proceeding.\n\n${input.prompt}`;
+    clearGroupPlanMode(group.folder);
+  }
 
   logger.info(
     {
       group: group.name,
       containerName,
-      mountCount: mounts.length,
       isMain: input.isMain,
+      entrypoint,
+      cwd,
+      effort: effort || 'default',
     },
-    'Spawning container agent',
+    'Spawning native agent',
   );
 
-  const logsDir = path.join(groupDir, 'logs');
+  const logsDir = path.join(resolveGroupFolderPath(group.folder), 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
   return new Promise((resolve) => {
-    const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+    const container = spawn('node', [entrypoint], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      cwd,
+      env: agentEnv,
     });
 
     onProcess(container, containerName);
@@ -449,17 +334,15 @@ export async function runContainerAgent(
       timedOut = true;
       logger.error(
         { group: group.name, containerName },
-        'Container timeout, stopping gracefully',
+        'Agent timeout, stopping gracefully',
       );
-      try {
-        stopContainer(containerName);
-      } catch (err) {
-        logger.warn(
-          { group: group.name, containerName, err },
-          'Graceful stop failed, force killing',
-        );
-        container.kill('SIGKILL');
-      }
+      container.kill('SIGTERM');
+      // Force kill after 5s if SIGTERM doesn't work
+      setTimeout(() => {
+        if (!container.killed) {
+          container.kill('SIGKILL');
+        }
+      }, 5000);
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
@@ -541,9 +424,6 @@ export async function runContainerAgent(
       const isError = code !== 0;
 
       if (isVerbose || isError) {
-        // On error, log input metadata only — not the full prompt.
-        // Full input is only included at verbose level to avoid
-        // persisting user conversation content on every non-zero exit.
         if (isVerbose) {
           logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
         } else {
@@ -555,16 +435,11 @@ export async function runContainerAgent(
           );
         }
         logLines.push(
-          `=== Container Args ===`,
-          containerArgs.join(' '),
+          `=== Entrypoint ===`,
+          entrypoint,
           ``,
-          `=== Mounts ===`,
-          mounts
-            .map(
-              (m) =>
-                `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-            )
-            .join('\n'),
+          `=== Working Directory ===`,
+          cwd,
           ``,
           `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
           stderr,
@@ -577,11 +452,6 @@ export async function runContainerAgent(
           `=== Input Summary ===`,
           `Prompt length: ${input.prompt.length} chars`,
           `Session ID: ${input.sessionId || 'new'}`,
-          ``,
-          `=== Mounts ===`,
-          mounts
-            .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
-            .join('\n'),
           ``,
         );
       }

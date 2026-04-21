@@ -9,9 +9,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 
-const IPC_DIR = '/workspace/ipc';
+const IPC_DIR = process.env.NANOCLAW_IPC_DIR || '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
@@ -50,11 +51,19 @@ server.tool(
       .describe(
         'Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.',
       ),
+    chat_jid: z
+      .string()
+      .optional()
+      .describe(
+        '(Main group only) Target a different chat. Defaults to the current chat.',
+      ),
   },
   async (args) => {
+    const targetJid = isMain && args.chat_jid ? args.chat_jid : chatJid;
+
     const data: Record<string, string | undefined> = {
       type: 'message',
-      chatJid,
+      chatJid: targetJid,
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
@@ -500,6 +509,192 @@ Use available_groups.json to find the JID for a group. The folder name must be c
         },
       ],
     };
+  },
+);
+
+server.tool(
+  'screenshot',
+  'Take a screenshot of the phone screen. Returns the file path to the saved image. Use the Read tool to view the image after capturing.',
+  {
+    output_path: z
+      .string()
+      .optional()
+      .describe(
+        'Where to save the screenshot. Defaults to ./screenshots/screenshot_<timestamp>.jpg',
+      ),
+  },
+  async (args) => {
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '')
+      .replace('T', '_')
+      .slice(0, 15);
+    const raw = `/data/local/tmp/screen_${timestamp}.png`;
+
+    let outputPath: string;
+    if (args.output_path) {
+      outputPath = path.resolve(args.output_path);
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    } else {
+      const screenshotsDir = path.resolve('./screenshots');
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+      outputPath = path.join(screenshotsDir, `screenshot_${timestamp}.jpg`);
+    }
+
+    try {
+      // Capture via root screencap
+      execFileSync('su', ['-c', `screencap -p ${raw}`], { timeout: 10000 });
+
+      // Resize to 900px wide JPEG (fits Claude's image size limit)
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-i', raw, '-vf', 'scale=900:-1', outputPath, '-loglevel', 'error'],
+        { timeout: 15000 },
+      );
+
+      // Clean up root-owned raw file
+      try {
+        execFileSync('su', ['-c', `rm -f ${raw}`], { timeout: 5000 });
+      } catch {
+        /* best effort */
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Screenshot saved to ${outputPath}`,
+          },
+        ],
+      };
+    } catch (err) {
+      // Clean up on failure
+      try {
+        execFileSync('su', ['-c', `rm -f ${raw}`], { timeout: 5000 });
+      } catch {
+        /* best effort */
+      }
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Screenshot failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'read_pdf',
+  'Extract text from a PDF file or URL. Use this when the user sends a PDF attachment, asks about a PDF file, or wants to read a PDF from a URL. Returns the extracted text content.',
+  {
+    source: z
+      .string()
+      .describe(
+        'Path to a local PDF file, or a URL starting with http:// or https://',
+      ),
+    info_only: z
+      .boolean()
+      .optional()
+      .describe(
+        'If true, return only PDF metadata (page count, title, etc.) instead of full text',
+      ),
+  },
+  async (args) => {
+    const isUrl = /^https?:\/\//.test(args.source);
+
+    try {
+      if (args.info_only && !isUrl) {
+        const output = execFileSync('pdfinfo', [args.source], {
+          timeout: 30000,
+          encoding: 'utf-8',
+        });
+        return {
+          content: [{ type: 'text' as const, text: output }],
+        };
+      }
+
+      let result: string;
+      if (isUrl) {
+        // Download to temp file, then extract
+        const tmpDir = process.env.PREFIX
+          ? `${process.env.PREFIX}/tmp`
+          : '/tmp';
+        const tmpFile = path.join(
+          tmpDir,
+          `pdf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.pdf`,
+        );
+        try {
+          execFileSync('curl', ['-fsSL', '-o', tmpFile, args.source], {
+            timeout: 30000,
+          });
+          result = execFileSync('pdftotext', ['-layout', tmpFile, '-'], {
+            timeout: 30000,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024,
+          });
+        } finally {
+          try {
+            fs.unlinkSync(tmpFile);
+          } catch {
+            /* best effort */
+          }
+        }
+      } else {
+        if (!fs.existsSync(args.source)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `File not found: ${args.source}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        result = execFileSync('pdftotext', ['-layout', args.source, '-'], {
+          timeout: 30000,
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024,
+        });
+      }
+
+      if (!result.trim()) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'PDF appears to be image-based (scanned). No extractable text found. Try using the Read tool directly to view the PDF.',
+            },
+          ],
+        };
+      }
+
+      // Truncate very long PDFs to avoid context overflow
+      const MAX_CHARS = 100000;
+      const truncated = result.length > MAX_CHARS;
+      const text = truncated
+        ? result.slice(0, MAX_CHARS) +
+          `\n\n[Truncated — showing first ${MAX_CHARS} of ${result.length} characters]`
+        : result;
+
+      return {
+        content: [{ type: 'text' as const, text }],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `PDF read failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   },
 );
 

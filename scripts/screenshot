@@ -1,0 +1,44 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# screenshot — capture the device screen and save a resized image
+#
+# Usage:
+#   screenshot              # saves to ./screenshots/screenshot_<timestamp>.jpg
+#   screenshot <path>       # saves to the specified path
+#   screenshot --help       # show usage
+#
+# The raw capture is taken via root screencap, then resized to 900px wide
+# (fits Claude's image reader limit) and saved as JPEG.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: screenshot [output_path]"
+  echo ""
+  echo "Captures the device screen and saves a resized JPEG."
+  echo ""
+  echo "  output_path   Optional. Where to save the image."
+  echo "                Defaults to ./screenshots/screenshot_<timestamp>.jpg"
+  exit 0
+fi
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+RAW="/data/local/tmp/screen_${TIMESTAMP}.png"
+
+if [[ -n "${1:-}" ]]; then
+  OUTPUT="$1"
+  mkdir -p "$(dirname "$OUTPUT")"
+else
+  OUTPUT="./screenshots/screenshot_${TIMESTAMP}.jpg"
+  mkdir -p "./screenshots"
+fi
+
+# Capture
+su -c "screencap -p $RAW"
+
+# Resize and convert to JPEG
+ffmpeg -y -i "$RAW" -vf "scale=900:-1" "$OUTPUT" -loglevel error
+
+# Clean up raw capture (root-owned file)
+su -c "rm -f $RAW"
+
+echo "$OUTPUT"

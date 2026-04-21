@@ -8,6 +8,12 @@ import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
+import {
+  MODEL_REGISTRY,
+  getGroupModel,
+  setGroupModel,
+  clearGroupModel,
+} from '../models.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -19,6 +25,9 @@ import {
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
+  onModelChange?: (chatJid: string) => void;
+  onSessionClear?: (chatJid: string) => void;
+  onCloseStdin?: (chatJid: string) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
@@ -42,6 +51,122 @@ async function sendTelegramMessage(
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
+  }
+}
+
+// Bot pool for agent teams: send-only Api instances (no polling)
+const poolApis: Api[] = [];
+const senderBotMap = new Map<string, number>();
+let nextPoolIndex = 0;
+
+// Per-group transient settings (reset on restart)
+const groupEffort = new Map<string, string>(); // folder → 'low' | 'medium' | 'high'
+const groupPlanMode = new Set<string>(); // folders with plan mode active
+
+export function getGroupEffort(folder: string): string | undefined {
+  return groupEffort.get(folder);
+}
+
+export function isGroupPlanMode(folder: string): boolean {
+  return groupPlanMode.has(folder);
+}
+
+export function clearGroupPlanMode(folder: string): void {
+  groupPlanMode.delete(folder);
+}
+
+/**
+ * Scan skills directories and return Telegram bot command entries.
+ * Reads SKILL.md frontmatter for the description.
+ */
+function discoverSkillCommands(): { command: string; description: string }[] {
+  const projectRoot = process.cwd();
+  const skillDirs = [
+    path.join(projectRoot, 'skills'),
+  ];
+
+  // Also scan all group skills directories
+  const groupsDir = path.join(projectRoot, 'groups');
+  if (fs.existsSync(groupsDir)) {
+    for (const folder of fs.readdirSync(groupsDir)) {
+      const groupSkills = path.join(groupsDir, folder, 'skills');
+      if (fs.existsSync(groupSkills)) skillDirs.push(groupSkills);
+    }
+  }
+
+  const seen = new Map<string, string>(); // command → description
+  for (const dir of skillDirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      const skillMd = path.join(dir, entry, 'SKILL.md');
+      if (!fs.existsSync(skillMd)) continue;
+      const content = fs.readFileSync(skillMd, 'utf-8');
+      // Parse description from frontmatter
+      const match = content.match(/^---\s*\n[\s\S]*?description:\s*(.+)\n[\s\S]*?---/m);
+      const desc = match?.[1]?.trim() || `Run ${entry} skill`;
+      // Telegram commands: 1-32 lowercase alphanumeric + underscores only
+      const command = entry.replace(/-/g, '_').toLowerCase();
+      if (/^[a-z0-9_]{1,32}$/.test(command)) {
+        seen.set(command, desc.slice(0, 256));
+      }
+    }
+  }
+
+  return [...seen.entries()].map(([command, description]) => ({ command, description }));
+}
+
+export async function initBotPool(tokens: string[]): Promise<void> {
+  for (const token of tokens) {
+    try {
+      const api = new Api(token);
+      const me = await api.getMe();
+      poolApis.push(api);
+      logger.info(
+        { username: me.username, id: me.id, poolSize: poolApis.length },
+        'Pool bot initialized',
+      );
+    } catch (err) {
+      logger.error({ err }, 'Failed to initialize pool bot');
+    }
+  }
+  if (poolApis.length > 0) {
+    logger.info({ count: poolApis.length }, 'Telegram bot pool ready');
+  }
+}
+
+export async function sendPoolMessage(
+  chatId: string,
+  text: string,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  if (poolApis.length === 0) {
+    // No pool bots — fall back to main bot send
+    return;
+  }
+
+  const key = `${groupFolder}:${sender}`;
+  let idx = senderBotMap.get(key);
+  if (idx === undefined) {
+    idx = nextPoolIndex % poolApis.length;
+    nextPoolIndex++;
+    senderBotMap.set(key, idx);
+    try {
+      await poolApis[idx].setMyName(sender);
+      await new Promise((r) => setTimeout(r, 2000));
+      logger.info({ sender, groupFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
+    } catch (err) {
+      logger.warn({ sender, err }, 'Failed to rename pool bot (sending anyway)');
+    }
+  }
+
+  const api = poolApis[idx];
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await sendTelegramMessage({ sendMessage: api.sendMessage.bind(api) }, numericId, text);
+    logger.info({ chatId, sender, poolIndex: idx, length: text.length }, 'Pool message sent');
+  } catch (err) {
+    logger.error({ chatId, sender, err }, 'Failed to send pool message');
   }
 }
 
@@ -132,9 +257,173 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
+    // Command to switch model
+    this.bot.command('model', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const groups = this.opts.registeredGroups();
+      const group = groups[chatJid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+
+      const arg = ctx.message?.text?.split(/\s+/).slice(1).join(' ').trim();
+
+      if (!arg) {
+        // Show current model and list available
+        const current = getGroupModel(group.folder);
+        const models = Object.entries(MODEL_REGISTRY)
+          .map(([alias, cfg]) => `  \`${alias}\` — ${cfg.label}`)
+          .join('\n');
+        const status = current
+          ? `Current: \`${current}\` (${MODEL_REGISTRY[current]?.label || 'unknown'})`
+          : 'Current: default (Claude via OAuth)';
+        ctx.reply(`${status}\n\nAvailable models:\n${models}\n\nUsage: \`/model <name>\` or \`/model default\``, {
+          parse_mode: 'Markdown',
+        });
+        return;
+      }
+
+      if (arg === 'default' || arg === 'reset') {
+        clearGroupModel(group.folder);
+        this.opts.onModelChange?.(chatJid);
+        ctx.reply('Model reset to default (Claude via OAuth).');
+        return;
+      }
+
+      if (!MODEL_REGISTRY[arg]) {
+        const available = Object.keys(MODEL_REGISTRY).join(', ');
+        ctx.reply(`Unknown model \`${arg}\`.\nAvailable: ${available}`, {
+          parse_mode: 'Markdown',
+        });
+        return;
+      }
+
+      setGroupModel(group.folder, arg);
+      this.opts.onModelChange?.(chatJid);
+      ctx.reply(`Model switched to *${MODEL_REGISTRY[arg].label}* (\`${arg}\`)`, {
+        parse_mode: 'Markdown',
+      });
+    });
+
+    this.bot.command('new', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const groups = this.opts.registeredGroups();
+      const group = groups[chatJid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+      this.opts.onSessionClear?.(chatJid);
+      ctx.reply('Session cleared. Next message starts a fresh conversation.');
+    });
+
+    this.bot.command('effort', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const groups = this.opts.registeredGroups();
+      const group = groups[chatJid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+      const arg = ctx.message?.text?.split(/\s+/)[1]?.toLowerCase();
+      const valid = ['low', 'medium', 'high'];
+      if (!arg || !valid.includes(arg)) {
+        const current = groupEffort.get(group.folder) || 'default';
+        ctx.reply(
+          `Current effort: \`${current}\`\nUsage: \`/effort low|medium|high\``,
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
+      groupEffort.set(group.folder, arg);
+      ctx.reply(`Effort set to *${arg}*.`, { parse_mode: 'Markdown' });
+    });
+
+    this.bot.command('plan', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const groups = this.opts.registeredGroups();
+      const group = groups[chatJid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+      if (groupPlanMode.has(group.folder)) {
+        groupPlanMode.delete(group.folder);
+        ctx.reply('Plan mode *off*. Agent will execute normally.', {
+          parse_mode: 'Markdown',
+        });
+      } else {
+        groupPlanMode.add(group.folder);
+        ctx.reply(
+          'Plan mode *on*. Agent will plan before executing. Send `/plan` again to turn off.',
+          { parse_mode: 'Markdown' },
+        );
+      }
+    });
+
+    this.bot.command('skills', (ctx) => {
+      const skills = discoverSkillCommands();
+
+      const builtinLines = [
+        '/model - Switch AI model',
+        '/new - Clear session, start fresh',
+        '/compact - Compact conversation context',
+        '/effort - Set reasoning effort (low/medium/high)',
+        '/plan - Toggle plan-before-execute mode',
+        '/skills - List available commands and skills',
+        '/tools - List available agent tools',
+      ];
+      const skillLines = skills.map((s) => {
+        // Truncate long descriptions for readability
+        const desc = s.description.length > 60
+          ? s.description.slice(0, 57) + '...'
+          : s.description;
+        return `/${s.command} - ${desc}`;
+      });
+      const sections = ['Built-in Commands:', ...builtinLines];
+      if (skillLines.length > 0) {
+        sections.push('', 'Skills:', ...skillLines);
+      }
+      ctx.reply(sections.join('\n'));
+    });
+
+    this.bot.command('tools', (ctx) => {
+      const sections = [
+        'Core Tools:',
+        'Bash - Run shell commands',
+        'Read - Read files (text, images, PDFs)',
+        'Write - Create new files',
+        'Edit - Modify existing files',
+        'Glob - Find files by pattern',
+        'Grep - Search file contents',
+        '',
+        'Web Tools:',
+        'WebSearch - Search the web',
+        'WebFetch - Fetch content from URLs',
+        '',
+        'Orchestration Tools:',
+        'Task - Create background tasks',
+        'TeamCreate - Create agent teams',
+        'SendMessage - Message between agents',
+        '',
+        'NanoClaw Tools (mcp):',
+        'send_message - Send a message to the chat',
+        'screenshot - Capture the phone screen',
+        'read_pdf - Extract text from PDF files or URLs',
+        'schedule_task - Schedule recurring/one-time tasks',
+        'list_tasks - List scheduled tasks',
+        'pause/resume/cancel/update_task - Manage tasks',
+        'register_group - Register a new chat group',
+      ];
+      ctx.reply(sections.join('\n'));
+    });
+
     // Telegram bot commands handled above — skip them in the general handler
     // so they don't also get stored as messages. All other /commands flow through.
-    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping']);
+    const TELEGRAM_BOT_COMMANDS = new Set([
+      'chatid', 'ping', 'model', 'new', 'effort', 'plan', 'skills', 'tools',
+    ]);
 
     this.bot.on('message:text', async (ctx) => {
       if (ctx.message.text.startsWith('/')) {
@@ -344,7 +633,7 @@ export class TelegramChannel implements Channel {
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
       this.bot!.start({
-        onStart: (botInfo) => {
+        onStart: async (botInfo) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },
             'Telegram bot connected',
@@ -353,6 +642,31 @@ export class TelegramChannel implements Channel {
           console.log(
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
+
+          // Register slash commands with Telegram for autocomplete menu
+          try {
+            const builtinCommands = [
+              { command: 'model', description: 'Switch AI model' },
+              { command: 'new', description: 'Clear session, start fresh' },
+              { command: 'compact', description: 'Compact conversation context' },
+              { command: 'effort', description: 'Set reasoning effort (low/medium/high)' },
+              { command: 'plan', description: 'Toggle plan-before-execute mode' },
+              { command: 'skills', description: 'List available commands and skills' },
+              { command: 'tools', description: 'List available agent tools' },
+              { command: 'chatid', description: 'Show this chat\'s registration ID' },
+              { command: 'ping', description: 'Check if bot is online' },
+            ];
+            const skillCommands = discoverSkillCommands();
+            const allCommands = [...builtinCommands, ...skillCommands];
+            await this.bot!.api.setMyCommands(allCommands);
+            logger.info(
+              { count: allCommands.length, skills: skillCommands.length },
+              'Telegram commands registered',
+            );
+          } catch (err) {
+            logger.warn({ err }, 'Failed to register Telegram commands');
+          }
+
           resolve();
         },
       });

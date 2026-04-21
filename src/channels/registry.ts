@@ -8,6 +8,9 @@ import {
 export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
+  onModelChange?: (chatJid: string) => void;
+  onSessionClear?: (chatJid: string) => void;
+  onCloseStdin?: (chatJid: string) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 

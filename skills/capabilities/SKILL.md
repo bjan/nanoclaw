@@ -7,17 +7,6 @@ description: Show what this NanoClaw instance can do — installed skills, avail
 
 Generate a structured read-only report of what this NanoClaw instance can do.
 
-**Main-channel check:** Only the main channel has `/workspace/project` mounted. Run:
-
-```bash
-test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
-```
-
-If `NOT_MAIN`, respond with:
-> This command is available in your main chat only. Send `/capabilities` there to see what I can do.
-
-Then stop — do not generate the report.
-
 ## How to gather the information
 
 Run these commands and compile the results into the report format below.
@@ -27,7 +16,7 @@ Run these commands and compile the results into the report format below.
 List skill directories available to you:
 
 ```bash
-ls -1 /home/node/.claude/skills/ 2>/dev/null || echo "No skills found"
+ls -1 ~/.claude/skills/ 2>/dev/null || echo "No skills found"
 ```
 
 Each directory is an installed skill. The directory name is the skill name (e.g., `agent-browser` → `/agent-browser`).
@@ -53,9 +42,9 @@ The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
 - `update_task` — update an existing task
 - `register_group` — register a new chat/group (main only)
 
-### 4. Container skills (Bash tools)
+### 4. Bash tools
 
-Check for executable tools in the container:
+Check for executable tools available to the agent:
 
 ```bash
 which agent-browser 2>/dev/null && echo "agent-browser: available" || echo "agent-browser: not found"
@@ -64,8 +53,9 @@ which agent-browser 2>/dev/null && echo "agent-browser: available" || echo "agen
 ### 5. Group info
 
 ```bash
-ls /workspace/group/CLAUDE.md 2>/dev/null && echo "Group memory: yes" || echo "Group memory: no"
-ls /workspace/extra/ 2>/dev/null && echo "Extra mounts: $(ls /workspace/extra/ 2>/dev/null | wc -l | tr -d ' ')" || echo "Extra mounts: none"
+echo "Group folder: $NANOCLAW_GROUP_FOLDER"
+test -f CLAUDE.md && echo "Group memory: yes" || echo "Group memory: no"
+test -d extra && ls extra/ 2>/dev/null | head -5 && echo "Extra dirs: $(ls extra/ 2>/dev/null | wc -l | tr -d ' ')" || echo "Extra dirs: none"
 ```
 
 ## Report format
@@ -73,11 +63,12 @@ ls /workspace/extra/ 2>/dev/null && echo "Extra mounts: $(ls /workspace/extra/ 2
 Present the report as a clean, readable message. Example:
 
 ```
-📋 *NanoClaw Capabilities*
+*NanoClaw Capabilities*
 
 *Installed Skills:*
 • /agent-browser — Browse the web, fill forms, extract data
 • /capabilities — This report
+• /status — Quick health check
 (list all found skills)
 
 *Tools:*
@@ -86,13 +77,13 @@ Present the report as a clean, readable message. Example:
 • Orchestration: Task, TeamCreate, SendMessage
 • MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
 
-*Container Tools:*
-• agent-browser: ✓
+*Bash Tools:*
+• agent-browser: available/not found
 
 *System:*
+• Group: telegram_main
 • Group memory: yes/no
-• Extra mounts: N directories
-• Main channel: yes
+• Extra dirs: N directories
 ```
 
 Adapt the output based on what you actually find — don't list things that aren't installed.

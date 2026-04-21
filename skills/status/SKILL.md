@@ -1,22 +1,11 @@
 ---
 name: status
-description: Quick read-only health check — session context, workspace mounts, tool availability, and task snapshot. Use when the user asks for system status or runs /status.
+description: Quick read-only health check — session context, workspace, tool availability, and task snapshot. Use when the user asks for system status or runs /status.
 ---
 
 # /status — System Status Check
 
 Generate a quick read-only status report of the current agent environment.
-
-**Main-channel check:** Only the main channel has `/workspace/project` mounted. Run:
-
-```bash
-test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
-```
-
-If `NOT_MAIN`, respond with:
-> This command is available in your main chat only. Send `/status` there to check system status.
-
-Then stop — do not generate the report.
 
 ## How to gather the information
 
@@ -27,20 +16,19 @@ Run the checks below and compile results into the report format.
 ```bash
 echo "Timestamp: $(date)"
 echo "Working dir: $(pwd)"
-echo "Channel: main"
+echo "Group: $NANOCLAW_GROUP_FOLDER"
+echo "Chat: $NANOCLAW_CHAT_JID"
 ```
 
-### 2. Workspace and mount visibility
+### 2. Workspace
 
 ```bash
-echo "=== Workspace ==="
-ls /workspace/ 2>/dev/null
 echo "=== Group folder ==="
-ls /workspace/group/ 2>/dev/null | head -20
-echo "=== Extra mounts ==="
-ls /workspace/extra/ 2>/dev/null || echo "none"
+ls | head -20
+echo "=== Extra dirs ==="
+ls extra/ 2>/dev/null || echo "none"
 echo "=== IPC ==="
-ls /workspace/ipc/ 2>/dev/null
+ls $NANOCLAW_IPC_DIR/ 2>/dev/null
 ```
 
 ### 3. Tool availability
@@ -52,7 +40,7 @@ Confirm which tool families are available to you:
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **MCP:** mcp__nanoclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
 
-### 4. Container utilities
+### 4. Runtime
 
 ```bash
 which agent-browser 2>/dev/null && echo "agent-browser: available" || echo "agent-browser: not installed"
@@ -75,23 +63,23 @@ If no tasks exist, report "No scheduled tasks."
 Present as a clean, readable message:
 
 ```
-🔍 *NanoClaw Status*
+*NanoClaw Status*
 
 *Session:*
-• Channel: main
+• Group: telegram_main
+• Chat: tg:6716918930
 • Time: 2026-03-14 09:30 UTC
-• Working dir: /workspace/group
 
 *Workspace:*
-• Group folder: ✓ (N files)
-• Extra mounts: none / N directories
-• IPC: ✓ (messages, tasks, input)
+• Group folder: N files
+• Extra dirs: none / N directories
+• IPC: messages, tasks, input
 
 *Tools:*
-• Core: ✓  Web: ✓  Orchestration: ✓  MCP: ✓
+• Core: ok  Web: ok  Orchestration: ok  MCP: ok
 
-*Container:*
-• agent-browser: ✓ / not installed
+*Runtime:*
+• agent-browser: available / not installed
 • Node: vXX.X.X
 • Claude Code: vX.X.X
 

@@ -1,0 +1,47 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# pdf-reader — extract text from PDFs (local files or URLs)
+#
+# Usage:
+#   pdf-reader <file.pdf>          # extract text from local PDF
+#   pdf-reader fetch <url>         # download and extract text from URL
+#   pdf-reader info <file.pdf>     # show PDF metadata
+#   pdf-reader --help              # show usage
+
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || -z "${1:-}" ]]; then
+  echo "Usage: pdf-reader <file.pdf | fetch <url> | info <file.pdf>>"
+  echo ""
+  echo "Commands:"
+  echo "  <file.pdf>       Extract text from a local PDF"
+  echo "  fetch <url>      Download PDF from URL and extract text"
+  echo "  info <file.pdf>  Show PDF metadata (pages, title, etc.)"
+  exit 0
+fi
+
+if [[ "$1" == "fetch" ]]; then
+  URL="${2:?URL required}"
+  TMPFILE="$(mktemp "$PREFIX/tmp/pdf_XXXXXX.pdf")"
+  trap 'rm -f "$TMPFILE"' EXIT
+  curl -fsSL -o "$TMPFILE" "$URL"
+  pdftotext -layout "$TMPFILE" -
+  exit 0
+fi
+
+if [[ "$1" == "info" ]]; then
+  FILE="${2:?File path required}"
+  if [[ ! -f "$FILE" ]]; then
+    echo "Error: file not found: $FILE" >&2
+    exit 1
+  fi
+  pdfinfo "$FILE"
+  exit 0
+fi
+
+# Default: extract text
+FILE="$1"
+if [[ ! -f "$FILE" ]]; then
+  echo "Error: file not found: $FILE" >&2
+  exit 1
+fi
+pdftotext -layout "$FILE" -

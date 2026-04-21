@@ -52,18 +52,10 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
-// Mock container-runtime
-vi.mock('./container-runtime.js', () => ({
-  CONTAINER_RUNTIME_BIN: 'docker',
-  hostGatewayArgs: () => [],
-  readonlyMountArgs: (h: string, c: string) => ['-v', `${h}:${c}:ro`],
-  stopContainer: vi.fn(),
-}));
-
 // Mock OneCLI SDK
 vi.mock('@onecli-sh/sdk', () => ({
   OneCLI: class {
-    applyContainerConfig = vi.fn().mockResolvedValue(true);
+    getContainerConfig = vi.fn().mockResolvedValue({ env: {}, caCertificate: null });
     createAgent = vi.fn().mockResolvedValue({ id: 'test' });
     ensureAgent = vi
       .fn()

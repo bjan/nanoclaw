@@ -12,6 +12,7 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
 import './channels/index.js';
@@ -19,6 +20,7 @@ import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
+import { initBotPool } from './channels/telegram.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -724,6 +726,21 @@ async function main(): Promise<void> {
       channel?: string,
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
+    onModelChange: (chatJid: string) => {
+      queue.closeStdin(chatJid);
+    },
+    onSessionClear: (chatJid: string) => {
+      const group = registeredGroups[chatJid];
+      if (group) {
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        logger.info({ chatJid, folder: group.folder }, 'Session cleared');
+      }
+      queue.closeStdin(chatJid);
+    },
+    onCloseStdin: (chatJid: string) => {
+      queue.closeStdin(chatJid);
+    },
     registeredGroups: () => registeredGroups,
   };
 
@@ -746,6 +763,11 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Initialize Telegram bot pool for agent swarm
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
   }
 
   // Start subsystems (independently of connection handler)

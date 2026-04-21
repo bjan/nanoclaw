@@ -60,7 +60,11 @@ interface SDKUserMessage {
   session_id: string;
 }
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
+const WORKSPACE_IPC = process.env.NANOCLAW_IPC_DIR || '/workspace/ipc';
+const WORKSPACE_GROUP = process.env.NANOCLAW_GROUP_DIR || '/workspace/group';
+const WORKSPACE_GLOBAL = process.env.NANOCLAW_GLOBAL_DIR || '/workspace/global';
+const WORKSPACE_EXTRA = process.env.NANOCLAW_EXTRA_DIR || '/workspace/extra';
+const IPC_INPUT_DIR = path.join(WORKSPACE_IPC, 'input');
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
@@ -157,13 +161,41 @@ function getSessionSummary(
 }
 
 /**
- * Archive the full transcript to conversations/ before compaction.
+ * Write an IPC message file so the host delivers it to the chat.
  */
-function createPreCompactHook(assistantName?: string): HookCallback {
+function writeIpcMessage(chatJid: string, groupFolder: string, text: string): void {
+  const messagesDir = path.join(WORKSPACE_IPC, 'messages');
+  fs.mkdirSync(messagesDir, { recursive: true });
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(messagesDir, filename);
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify({
+    type: 'message',
+    chatJid,
+    text,
+    groupFolder,
+    timestamp: new Date().toISOString(),
+  }, null, 2));
+  fs.renameSync(tempPath, filepath);
+}
+
+/**
+ * Archive the full transcript to conversations/ before compaction.
+ * Also notifies the chat that compaction is starting.
+ */
+function createPreCompactHook(chatJid: string, groupFolder: string, assistantName?: string): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preCompact = input as PreCompactHookInput;
     const transcriptPath = preCompact.transcript_path;
     const sessionId = preCompact.session_id;
+
+    // Notify the chat that compaction is starting
+    try {
+      writeIpcMessage(chatJid, groupFolder, '_Compacting conversation context... this may take a moment._');
+      log('Sent compaction notification to chat');
+    } catch (err) {
+      log(`Failed to send compaction notification: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     if (!transcriptPath || !fs.existsSync(transcriptPath)) {
       log('No transcript found for archiving');
@@ -182,7 +214,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       const summary = getSessionSummary(sessionId, transcriptPath);
       const name = summary ? sanitizeFilename(summary) : generateFallbackName();
 
-      const conversationsDir = '/workspace/group/conversations';
+      const conversationsDir = path.join(WORKSPACE_GROUP, 'conversations');
       fs.mkdirSync(conversationsDir, { recursive: true });
 
       const date = new Date().toISOString().split('T')[0];
@@ -413,7 +445,7 @@ async function runQuery(
   let resultCount = 0;
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  const globalClaudeMdPath = path.join(WORKSPACE_GLOBAL, 'CLAUDE.md');
   let globalClaudeMd: string | undefined;
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
@@ -422,7 +454,7 @@ async function runQuery(
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
-  const extraBase = '/workspace/extra';
+  const extraBase = WORKSPACE_EXTRA;
   if (fs.existsSync(extraBase)) {
     for (const entry of fs.readdirSync(extraBase)) {
       const fullPath = path.join(extraBase, entry);
@@ -435,13 +467,20 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Parse effort from env var (set by /effort Telegram command)
+  const effortEnv = process.env.NANOCLAW_EFFORT;
+  const effort = (['low', 'medium', 'high', 'max'].includes(effortEnv || '')
+    ? effortEnv
+    : undefined) as 'low' | 'medium' | 'high' | 'max' | undefined;
+
   for await (const message of query({
     prompt: stream,
     options: {
-      cwd: '/workspace/group',
+      cwd: WORKSPACE_GROUP,
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
+      effort,
       systemPrompt: globalClaudeMd
         ? {
             type: 'preset' as const,
@@ -487,7 +526,7 @@ async function runQuery(
       },
       hooks: {
         PreCompact: [
-          { hooks: [createPreCompactHook(containerInput.assistantName)] },
+          { hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] },
         ],
       },
     },
@@ -679,7 +718,7 @@ async function main(): Promise<void> {
           allowDangerouslySkipPermissions: true,
           settingSources: ['project', 'user'] as const,
           hooks: {
-            PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+            PreCompact: [{ hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] }],
           },
         },
       })) {

@@ -1,0 +1,2 @@
+#!/data/data/com.termux/files/usr/bin/bash
+node node_modules/typescript/bin/tsc && sv restart nanoclaw && echo "✓ rebuilt & restarted"

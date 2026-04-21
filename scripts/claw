@@ -1,0 +1,337 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""
+claw — NanoClaw CLI
+Run a NanoClaw agent natively from the command line.
+
+Usage:
+  claw "What is 2+2?"
+  claw -g <group_name> "Review this code"
+  claw -s <session-id> "Continue"
+  claw --list-groups
+  echo "prompt text" | claw --pipe
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+# ── Globals ─────────────────────────────────────────────────────────────────
+
+VERBOSE = False
+
+def dbg(*args):
+    if VERBOSE:
+        print("»", *args, file=sys.stderr)
+
+# ── Config ──────────────────────────────────────────────────────────────────
+
+def _find_nanoclaw_dir() -> Path:
+    if env := os.environ.get("NANOCLAW_DIR"):
+        return Path(env).expanduser()
+    here = Path(__file__).resolve()
+    for parent in [here.parent, here.parent.parent]:
+        if (parent / "store" / "messages.db").exists() or (parent / ".env").exists():
+            return parent
+    return Path.home() / "nanoclaw"
+
+NANOCLAW_DIR = _find_nanoclaw_dir()
+DB_PATH      = NANOCLAW_DIR / "store" / "messages.db"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def get_groups(db: Path) -> list[dict]:
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT jid, name, folder, is_main FROM registered_groups ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return [{"jid": r[0], "name": r[1], "folder": r[2], "is_main": bool(r[3])} for r in rows]
+
+
+def find_group(groups: list[dict], query: str) -> dict | None:
+    q = query.lower()
+    for g in groups:
+        if g["name"].lower() == q or g["folder"].lower() == q:
+            return g
+    matches = [g for g in groups if q in g["name"].lower() or q in g["folder"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        names = ", ".join(f'"{g["name"]}"' for g in matches)
+        sys.exit(f"error: ambiguous group '{query}'. Matches: {names}")
+    return None
+
+
+def get_session(db: Path, folder: str) -> str | None:
+    """Read the stored session ID for a group."""
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT session_id FROM sessions WHERE group_folder = ?", (folder,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def prepare_env(folder: str, is_main: bool) -> dict[str, str]:
+    """Build environment variables for the native agent process."""
+    groups_dir = NANOCLAW_DIR / "groups"
+    data_dir = NANOCLAW_DIR / "data"
+    group_dir = groups_dir / folder
+    global_dir = groups_dir / "global"
+    sessions_dir = data_dir / "sessions" / folder
+    claude_dir = sessions_dir / ".claude"
+    ipc_dir = data_dir / "ipc" / folder
+    extra_dir = group_dir / "extra"
+
+    # Ensure dirs
+    group_dir.mkdir(parents=True, exist_ok=True)
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ("messages", "tasks", "input"):
+        (ipc_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    # Symlink credentials if needed
+    real_creds = Path.home() / ".claude" / ".credentials.json"
+    group_creds = claude_dir / ".credentials.json"
+    if real_creds.exists() and not group_creds.exists():
+        try:
+            group_creds.symlink_to(real_creds)
+        except OSError:
+            import shutil
+            shutil.copy2(real_creds, group_creds)
+
+    env = {**os.environ}
+    env.update({
+        "HOME": str(sessions_dir),
+        "CLAUDE_CONFIG_DIR": str(claude_dir),
+        "NANOCLAW_IPC_DIR": str(ipc_dir),
+        "NANOCLAW_GROUP_DIR": str(group_dir),
+        "NANOCLAW_GLOBAL_DIR": str(global_dir),
+        "NANOCLAW_EXTRA_DIR": str(extra_dir),
+        "NANOCLAW_CHAT_JID": "cli:0",
+        "NANOCLAW_GROUP_FOLDER": folder,
+        "NANOCLAW_IS_MAIN": "1" if is_main else "0",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "165000",
+    })
+    return env
+
+
+def run_agent(entrypoint: str, payload: dict, env: dict,
+              cwd: str, timeout: int = 300) -> None:
+    """Spawn the agent-runner, stream stderr, parse output."""
+    cmd = ["node", entrypoint]
+    dbg(f"cmd: {' '.join(cmd)}")
+    dbg(f"cwd: {cwd}")
+
+    if VERBOSE:
+        safe = {k: v for k, v in payload.items() if k != "secrets"}
+        dbg(f"payload: {json.dumps(safe, indent=2)}")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+    )
+
+    # Write _close sentinel after a short delay so agent exits after first response
+    ipc_input = Path(env["NANOCLAW_IPC_DIR"]) / "input"
+    def write_close():
+        import time
+        time.sleep(3)
+        (ipc_input / "_close").write_text("")
+    threading.Thread(target=write_close, daemon=True).start()
+
+    proc.stdin.write(json.dumps(payload).encode())
+    proc.stdin.close()
+
+    stdout_lines: list[str] = []
+    done = threading.Event()
+
+    def stream_stderr():
+        for raw in proc.stderr:
+            line = raw.decode(errors="replace").rstrip()
+            if line.startswith("[agent-runner]"):
+                dbg(line)
+            else:
+                print(line, file=sys.stderr)
+
+    def stream_stdout():
+        for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            stdout_lines.append(line)
+            dbg(f"stdout: {line}")
+            if line.strip() == "---NANOCLAW_OUTPUT_END---":
+                dbg("output sentinel found, terminating agent")
+                done.set()
+                try:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                except ProcessLookupError:
+                    pass
+                return
+
+    t_err = threading.Thread(target=stream_stderr, daemon=True)
+    t_out = threading.Thread(target=stream_stdout, daemon=True)
+    t_err.start()
+    t_out.start()
+
+    if not done.wait(timeout=timeout):
+        t_out.join(timeout=2)
+        if not done.is_set():
+            proc.kill()
+            sys.exit(f"error: agent timed out after {timeout}s")
+
+    t_err.join(timeout=5)
+    t_out.join(timeout=5)
+    proc.wait()
+    dbg(f"agent done (rc={proc.returncode}), {len(stdout_lines)} stdout lines")
+    stdout = "\n".join(stdout_lines)
+
+    # Parse output block
+    match = re.search(
+        r"---NANOCLAW_OUTPUT_START---\n(.*?)\n---NANOCLAW_OUTPUT_END---",
+        stdout,
+        re.DOTALL,
+    )
+
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            status = data.get("status", "unknown")
+            if status == "success":
+                result = data.get("result", "")
+                if result:
+                    print(result)
+                session_id = data.get("newSessionId")
+                if session_id:
+                    print(f"\n[session: {session_id}]", file=sys.stderr)
+            else:
+                print(f"[{status}] {data.get('error', '')}", file=sys.stderr)
+                sys.exit(1)
+        except json.JSONDecodeError:
+            print(match.group(1))
+    else:
+        print(stdout)
+
+    if proc.returncode not in (0, None, -15):  # -15 = SIGTERM (expected)
+        sys.exit(proc.returncode)
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="claw",
+        description="Run a NanoClaw agent from the command line.",
+    )
+    parser.add_argument("prompt", nargs="?", help="Prompt to send")
+    parser.add_argument("-g", "--group", help="Group name or folder (fuzzy match)")
+    parser.add_argument("-j", "--jid", help="Chat JID (exact)")
+    parser.add_argument("-s", "--session", help="Session ID to resume")
+    parser.add_argument("-p", "--pipe", action="store_true",
+                        help="Read prompt from stdin")
+    parser.add_argument("--list-groups", action="store_true",
+                        help="List registered groups and exit")
+    parser.add_argument("--timeout", type=int, default=300, metavar="SECS",
+                        help="Max seconds to wait (default: 300)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show debug info")
+    args = parser.parse_args()
+
+    global VERBOSE
+    VERBOSE = args.verbose
+
+    groups = get_groups(DB_PATH) if DB_PATH.exists() else []
+
+    if args.list_groups:
+        print(f"{'NAME':<35} {'FOLDER':<30} {'JID'}")
+        print("-" * 100)
+        for g in groups:
+            main_tag = " [main]" if g["is_main"] else ""
+            print(f"{g['name']:<35} {g['folder']:<30} {g['jid']}{main_tag}")
+        return
+
+    # Resolve prompt
+    if args.pipe or (not sys.stdin.isatty() and not args.prompt):
+        stdin_text = sys.stdin.read().strip()
+        prompt = f"{args.prompt}\n\n{stdin_text}" if args.prompt else stdin_text
+    else:
+        prompt = args.prompt
+
+    if not prompt:
+        parser.print_help()
+        sys.exit(1)
+
+    # Resolve group
+    jid = args.jid
+    group_folder = None
+    is_main = False
+
+    if args.group:
+        g = find_group(groups, args.group)
+        if g is None:
+            sys.exit(f"error: group '{args.group}' not found. Run --list-groups to see options.")
+        jid = g["jid"]
+        group_folder = g["folder"]
+        is_main = g["is_main"]
+    elif not jid:
+        mains = [g for g in groups if g["is_main"]]
+        if mains:
+            jid = mains[0]["jid"]
+            group_folder = mains[0]["folder"]
+            is_main = True
+        else:
+            sys.exit("error: no group specified and no main group found. Use -g or -j.")
+
+    if not group_folder:
+        # Lookup folder by JID
+        for g in groups:
+            if g["jid"] == jid:
+                group_folder = g["folder"]
+                is_main = g["is_main"]
+                break
+        if not group_folder:
+            sys.exit(f"error: JID '{jid}' not found in registered groups.")
+
+    # Get stored session if not provided
+    session_id = args.session
+    if not session_id:
+        session_id = get_session(DB_PATH, group_folder)
+
+    entrypoint = str(NANOCLAW_DIR / "container" / "agent-runner" / "dist" / "index.js")
+    if not Path(entrypoint).exists():
+        sys.exit(f"error: agent-runner not built. Run: cd container/agent-runner && npm install && node ../../node_modules/typescript/bin/tsc")
+
+    env = prepare_env(group_folder, is_main)
+    cwd = str(NANOCLAW_DIR / "groups" / group_folder)
+
+    payload = {
+        "prompt": prompt,
+        "groupFolder": group_folder,
+        "chatJid": jid,
+        "isMain": is_main,
+        "assistantName": "Nano",
+    }
+    if session_id:
+        payload["sessionId"] = session_id
+
+    group_label = group_folder or jid
+    print(f"[{group_label}] running...", file=sys.stderr)
+    run_agent(entrypoint, payload, env, cwd, timeout=args.timeout)
+
+
+if __name__ == "__main__":
+    main()

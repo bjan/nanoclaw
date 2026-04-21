@@ -1,0 +1,73 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# check-inbox — read messages from other NanoClaw agents
+#
+# Usage:
+#   check-inbox              # show and archive unread messages
+#   check-inbox --peek       # show messages without marking as read
+#   check-inbox --count      # just show message count
+#   check-inbox --help
+
+set -euo pipefail
+
+# Find nanoclaw root
+if [[ -n "${NANOCLAW_DIR:-}" ]]; then
+  ROOT="$NANOCLAW_DIR"
+else
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+
+INBOX="$ROOT/data/inbox"
+READ_DIR="$INBOX/read"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: check-inbox [--peek|--count]"
+  echo ""
+  echo "  (default)   Show unread messages and move them to inbox/read/"
+  echo "  --peek      Show messages without marking as read"
+  echo "  --count     Just show message count"
+  exit 0
+fi
+
+# Ensure inbox exists
+if [[ ! -d "$INBOX" ]]; then
+  echo "No messages."
+  exit 0
+fi
+
+# Find message files (exclude read/ subdir)
+mapfile -t FILES < <(find "$INBOX" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "No messages."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--count" || "${1:-}" == "-c" ]]; then
+  echo "${#FILES[@]} unread message(s)"
+  exit 0
+fi
+
+PEEK=false
+[[ "${1:-}" == "--peek" || "${1:-}" == "-p" ]] && PEEK=true
+
+echo "${#FILES[@]} message(s):"
+echo ""
+
+for f in "${FILES[@]}"; do
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as fh:
+    d = json.load(fh)
+sender = d.get('from_agent', d.get('from', 'unknown'))
+ts = d.get('timestamp', 'unknown')
+msg = d.get('message', d.get('text', '(empty)'))
+print(f'[{ts}] From {sender}:')
+print(msg)
+print('---')
+" "$f"
+
+  if [[ "$PEEK" == "false" ]]; then
+    mkdir -p "$READ_DIR"
+    mv "$f" "$READ_DIR/"
+  fi
+done

@@ -698,6 +698,245 @@ server.tool(
   },
 );
 
+// --- Cross-instance agent communication ---
+
+// Load agents config (relative to nanoclaw root, passed via env)
+const NANOCLAW_ROOT =
+  process.env.NANOCLAW_GLOBAL_DIR
+    ? path.resolve(process.env.NANOCLAW_GLOBAL_DIR, '..')
+    : path.resolve('.');
+const AGENTS_CONFIG_PATH = path.join(NANOCLAW_ROOT, 'data', 'agents.json');
+
+interface AgentEntry {
+  host: string;
+  nanoclaw_dir: string;
+  type: 'dev' | 'service';
+  group?: string;
+  description?: string;
+}
+
+function loadAgents(): Record<string, AgentEntry> {
+  try {
+    const raw = fs.readFileSync(AGENTS_CONFIG_PATH, 'utf-8');
+    return JSON.parse(raw).agents || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Write a message file to a directory (local or remote via SSH).
+ * Returns the filename written.
+ */
+function writeMessageFile(
+  host: string,
+  dir: string,
+  data: object,
+): string {
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const json = JSON.stringify(data, null, 2);
+
+  if (host === 'localhost') {
+    fs.mkdirSync(dir, { recursive: true });
+    const filepath = path.join(dir, filename);
+    const tempPath = `${filepath}.tmp`;
+    fs.writeFileSync(tempPath, json);
+    fs.renameSync(tempPath, filepath);
+  } else {
+    // Remote: use SSH to write
+    const script = `mkdir -p '${dir}' && cat > '${dir}/${filename}.tmp' && mv '${dir}/${filename}.tmp' '${dir}/${filename}'`;
+    execFileSync('ssh', [host, 'bash', '-c', `'${script}'`], {
+      input: json,
+      timeout: 15000,
+    });
+  }
+
+  return filename;
+}
+
+server.tool(
+  'remote_message',
+  `Send a message to another NanoClaw agent (local or on a remote host). Messages are delivered via IPC for service agents (real-time injection into active session) or via inbox for dev agents (checked on demand).
+
+Use this to coordinate work, share findings, or request help from agents on other instances.`,
+  {
+    target: z
+      .string()
+      .describe(
+        'Target agent ID (e.g., "nix:dev", "nix:telegram_main", "phone:dev", "phone:telegram_main"). Use list_agents to see available targets.',
+      ),
+    message: z.string().describe('The message to send'),
+  },
+  async (args) => {
+    const agents = loadAgents();
+    const agent = agents[args.target];
+
+    if (!agent) {
+      const available = Object.keys(agents).join(', ');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Unknown agent "${args.target}". Available: ${available || 'none (check data/agents.json)'}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const envelope = {
+      from: `${groupFolder}@${agent.host === 'localhost' ? 'local' : 'remote'}`,
+      from_agent: groupFolder,
+      message: args.message,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      if (agent.type === 'service' && agent.group) {
+        // Service agent: inject into IPC input directory (real-time)
+        const inputDir = path.join(
+          agent.nanoclaw_dir,
+          'data',
+          'ipc',
+          agent.group,
+          'input',
+        );
+        const ipcData = { type: 'message', text: `[From ${groupFolder}] ${args.message}` };
+        writeMessageFile(agent.host, inputDir, ipcData);
+      } else {
+        // Dev agent: write to inbox directory
+        const inboxDir = path.join(agent.nanoclaw_dir, 'data', 'inbox');
+        writeMessageFile(agent.host, inboxDir, envelope);
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Message delivered to ${args.target} (${agent.type === 'service' ? 'IPC injection' : 'inbox'}).`,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Failed to send to ${args.target}: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'check_inbox',
+  'Check for messages from other agents. Returns all unread messages and marks them as read.',
+  {},
+  async () => {
+    const inboxDir = path.join(NANOCLAW_ROOT, 'data', 'inbox');
+    const readDir = path.join(inboxDir, 'read');
+
+    try {
+      if (!fs.existsSync(inboxDir)) {
+        return {
+          content: [{ type: 'text' as const, text: 'No messages.' }],
+        };
+      }
+
+      const files = fs
+        .readdirSync(inboxDir)
+        .filter((f) => f.endsWith('.json'))
+        .sort();
+
+      if (files.length === 0) {
+        return {
+          content: [{ type: 'text' as const, text: 'No messages.' }],
+        };
+      }
+
+      const messages: string[] = [];
+      fs.mkdirSync(readDir, { recursive: true });
+
+      for (const file of files) {
+        const filepath = path.join(inboxDir, file);
+        try {
+          const data = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+          const time = data.timestamp
+            ? new Date(data.timestamp).toLocaleString()
+            : 'unknown';
+          messages.push(
+            `[${time}] From ${data.from_agent || data.from || 'unknown'}:\n${data.message}`,
+          );
+          // Move to read
+          fs.renameSync(filepath, path.join(readDir, file));
+        } catch {
+          // Skip corrupt files
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              messages.length > 0
+                ? `${messages.length} message(s):\n\n${messages.join('\n\n---\n\n')}`
+                : 'No messages.',
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Error checking inbox: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'list_agents',
+  'List all known agents across all NanoClaw instances.',
+  {},
+  async () => {
+    const agents = loadAgents();
+    const entries = Object.entries(agents);
+
+    if (entries.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'No agents configured. Check data/agents.json.',
+          },
+        ],
+      };
+    }
+
+    const lines = entries.map(
+      ([id, a]) =>
+        `• ${id} — ${a.description || a.type} [${a.host}:${a.nanoclaw_dir}]`,
+    );
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Known agents:\n${lines.join('\n')}`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

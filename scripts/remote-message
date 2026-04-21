@@ -1,0 +1,124 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# remote-message — send a message to another NanoClaw agent
+#
+# Usage:
+#   remote-message <target> <message>
+#   remote-message --list              # list known agents
+#   remote-message --help
+#
+# Reads agent config from data/agents.json (relative to NANOCLAW_DIR or script location).
+# Service agents get IPC input injection (real-time). Dev agents get inbox delivery.
+
+set -euo pipefail
+
+# Find nanoclaw root
+if [[ -n "${NANOCLAW_DIR:-}" ]]; then
+  ROOT="$NANOCLAW_DIR"
+else
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+
+CONFIG="$ROOT/data/agents.json"
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: agents config not found at $CONFIG" >&2
+  exit 1
+fi
+
+show_help() {
+  echo "Usage: remote-message <target> <message>"
+  echo "       remote-message --list"
+  echo ""
+  echo "Targets are defined in data/agents.json"
+  echo "Service agents: message injected via IPC (real-time)"
+  echo "Dev agents: message written to inbox (check with check-inbox)"
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || -z "${1:-}" ]]; then
+  show_help
+  exit 0
+fi
+
+if [[ "$1" == "--list" || "$1" == "-l" ]]; then
+  echo "Known agents:"
+  python3 -c "
+import json
+with open('$CONFIG') as f:
+    agents = json.load(f).get('agents', {})
+for aid, a in agents.items():
+    desc = a.get('description', a.get('type', ''))
+    host = a.get('host', '?')
+    print(f'  {aid:25s} {desc} [{host}]')
+"
+  exit 0
+fi
+
+TARGET="$1"
+shift
+MESSAGE="$*"
+
+if [[ -z "$MESSAGE" ]]; then
+  echo "Error: message is required" >&2
+  show_help
+  exit 1
+fi
+
+# Parse agent config and build the JSON payload with python3 (handles escaping properly)
+SENDER="${NANOCLAW_GROUP_FOLDER:-dev@${HOSTNAME:-phone}}"
+FILENAME="$(date +%s)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n').json"
+
+RESULT=$(python3 -c "
+import json, sys
+
+with open('$CONFIG') as f:
+    agents = json.load(f).get('agents', {})
+
+target = sys.argv[1]
+message = sys.argv[2]
+sender = sys.argv[3]
+
+a = agents.get(target)
+if not a:
+    avail = ', '.join(agents.keys())
+    print(f'ERROR:Unknown agent \"{target}\". Available: {avail}', file=sys.stderr)
+    sys.exit(1)
+
+host = a['host']
+ncdir = a['nanoclaw_dir']
+atype = a['type']
+group = a.get('group', '')
+
+if atype == 'service' and group:
+    directory = f'{ncdir}/data/ipc/{group}/input'
+    payload = json.dumps({'type': 'message', 'text': f'[From {sender}] {message}'}, indent=2)
+else:
+    directory = f'{ncdir}/data/inbox'
+    import datetime
+    payload = json.dumps({
+        'from_agent': sender,
+        'message': message,
+        'timestamp': datetime.datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z')
+    }, indent=2)
+
+# Output: host|directory|type|payload
+print(f'{host}|{directory}|{atype}')
+print(payload)
+" "$TARGET" "$MESSAGE" "$SENDER")
+
+# Parse result
+HEADER=$(echo "$RESULT" | head -1)
+PAYLOAD=$(echo "$RESULT" | tail -n +2)
+
+IFS='|' read -r HOST DIR TYPE <<< "$HEADER"
+
+if [[ "$HOST" == "localhost" ]]; then
+  mkdir -p "$DIR"
+  TMPFILE="$DIR/$FILENAME.tmp"
+  echo "$PAYLOAD" > "$TMPFILE"
+  mv "$TMPFILE" "$DIR/$FILENAME"
+else
+  echo "$PAYLOAD" | ssh "$HOST" "mkdir -p '$DIR' && cat > '$DIR/$FILENAME.tmp' && mv '$DIR/$FILENAME.tmp' '$DIR/$FILENAME'"
+fi
+
+DELIVERY=$([[ "$TYPE" == "service" ]] && echo "IPC injection" || echo "inbox")
+echo "Message delivered to $TARGET ($DELIVERY)"

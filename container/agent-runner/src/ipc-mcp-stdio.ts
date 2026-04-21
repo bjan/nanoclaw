@@ -703,7 +703,7 @@ server.tool(
 // Load agents config (relative to nanoclaw root, passed via env)
 const NANOCLAW_ROOT =
   process.env.NANOCLAW_GLOBAL_DIR
-    ? path.resolve(process.env.NANOCLAW_GLOBAL_DIR, '..')
+    ? path.resolve(process.env.NANOCLAW_GLOBAL_DIR, '..', '..')
     : path.resolve('.');
 const AGENTS_CONFIG_PATH = path.join(NANOCLAW_ROOT, 'data', 'agents.json');
 

@@ -373,6 +373,8 @@ export class TelegramChannel implements Channel {
         '/plan - Toggle plan-before-execute mode',
         '/skills - List available commands and skills',
         '/tools - List available agent tools',
+        '/tg_swarm - Launch agent team in swarm group',
+        '/background_swarm - Launch agent team silently',
       ];
       const skillLines = skills.map((s) => {
         // Truncate long descriptions for readability
@@ -433,6 +435,13 @@ export class TelegramChannel implements Channel {
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
+
+      // Telegram commands use underscores, but CLAUDE.md uses hyphens.
+      // Convert /tg_swarm → /tg-swarm, /background_swarm → /background-swarm
+      if (content.startsWith('/tg_swarm'))
+        content = content.replace('/tg_swarm', '/tg-swarm');
+      if (content.startsWith('/background_swarm'))
+        content = content.replace('/background_swarm', '/background-swarm');
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
         ctx.from?.first_name ||
@@ -653,6 +662,8 @@ export class TelegramChannel implements Channel {
               { command: 'plan', description: 'Toggle plan-before-execute mode' },
               { command: 'skills', description: 'List available commands and skills' },
               { command: 'tools', description: 'List available agent tools' },
+              { command: 'tg_swarm', description: 'Launch agent team with live output in swarm group' },
+              { command: 'background_swarm', description: 'Launch agent team silently, report results here' },
               { command: 'chatid', description: 'Show this chat\'s registration ID' },
               { command: 'ping', description: 'Check if bot is online' },
             ];

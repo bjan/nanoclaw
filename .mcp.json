@@ -1,3 +1,11 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "remote": {
+      "command": "node",
+      "args": ["/data/data/com.termux/files/home/nanoclaw/scripts/mcp/remote-message-server.mjs"],
+      "env": {
+        "NANOCLAW_DIR": "/data/data/com.termux/files/home/nanoclaw"
+      }
+    }
+  }
 }

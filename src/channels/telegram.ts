@@ -1,3 +1,4 @@
+import { execSync, spawn } from 'child_process';
 import fs from 'fs';
 import https from 'https';
 import path from 'path';
@@ -52,6 +53,162 @@ async function sendTelegramMessage(
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
+}
+
+// Dynamic MCP tool listing — queries MCP servers and caches the result
+let cachedToolList: string | null = null;
+
+function queryMcpTools(command: string, args: string[], env: Record<string, string> = {}): Promise<Array<{ name: string; description: string }>> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ...env },
+    });
+
+    let buffer = '';
+    let resolved = false;
+
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        logger.warn({ command, args: args[0], stderr: stderr.slice(0, 200) }, 'MCP tool query timed out');
+        child.kill();
+        resolve([]);
+      }
+    }, 10000);
+
+    child.stdout.on('data', (d: Buffer) => {
+      buffer += d.toString();
+      // Process complete lines
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // keep incomplete last line
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.id === 1 && msg.result) {
+            // Initialize response received — now send tools/list
+            child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+          } else if (msg.id === 2 && msg.result?.tools) {
+            // Got tools — resolve and clean up
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timer);
+              resolve(msg.result.tools.map((t: any) => ({
+                name: t.name,
+                description: (t.description || '').split('\n')[0].slice(0, 80),
+              })));
+              try { child.stdin.end(); } catch {}
+              child.kill();
+            }
+          }
+        } catch {}
+      }
+    });
+
+    // Send initialize
+    child.stdin.write(JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'tools-query', version: '0.1' } },
+    }) + '\n');
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (!resolved) {
+        logger.warn({ command, args: args[0], code, stderr: stderr.slice(0, 200) }, 'MCP tool query closed without result');
+        resolved = true;
+        resolve([]);
+      }
+    });
+  });
+}
+
+async function getToolList(): Promise<string> {
+  if (cachedToolList) return cachedToolList;
+
+  const nanoclaw_dir = process.env.NANOCLAW_DIR || path.join(process.env.HOME || '', 'nanoclaw');
+  const mcpServerPath = path.join(nanoclaw_dir, 'container/agent-runner/dist/ipc-mcp-stdio.js');
+  const signetProxyPath = path.join(nanoclaw_dir, 'scripts/mcp/signet-filtered.mjs');
+
+  const signetExists = fs.existsSync(signetProxyPath);
+  logger.info({ mcpServerPath, signetProxyPath, signetExists }, 'Querying MCP tools');
+
+  const [nanoclawTools, signetTools] = await Promise.all([
+    queryMcpTools('node', [mcpServerPath], {
+      NANOCLAW_CHAT_JID: 'tg:0',
+      NANOCLAW_GROUP_FOLDER: '_query',
+      NANOCLAW_IS_MAIN: '0',
+    }),
+    signetExists
+      ? queryMcpTools('node', [signetProxyPath], {
+          SIGNET_AGENT_ID: 'default',
+          SIGNET_HOST: '127.0.0.1',
+          SIGNET_PORT: '3850',
+        })
+      : Promise.resolve([]),
+  ]);
+
+  logger.info({ nanoclawCount: nanoclawTools.length, signetCount: signetTools.length }, 'MCP tools queried');
+
+  // Format tool name + short description as a compact line
+  const fmt = (t: { name: string; description: string }) => {
+    // Truncate description to first sentence or 60 chars
+    let desc = t.description.split(/\.\s/)[0];
+    if (desc.length > 60) desc = desc.slice(0, 57) + '...';
+    return `  \`${t.name}\` — ${desc}`;
+  };
+
+  const sections: string[] = [
+    '*Built-in*',
+    '  `Bash` `Read` `Write` `Edit` `Glob` `Grep`',
+    '  `WebSearch` `WebFetch`',
+    '  `Task` `TeamCreate` `SendMessage`',
+  ];
+
+  if (nanoclawTools.length > 0) {
+    sections.push('', '*NanoClaw*');
+    for (const t of nanoclawTools) sections.push(fmt(t));
+  }
+
+  if (signetTools.length > 0) {
+    // Skip compatibility aliases and internal management tools
+    const skip = new Set(['entity_list', 'entity_get', 'entity_aspects', 'entity_groups',
+      'entity_claims', 'entity_attributes', 'mcp_server_list', 'mcp_server_search',
+      'mcp_server_enable', 'mcp_server_disable', 'mcp_server_scope_get', 'mcp_server_scope_set',
+      'mcp_server_policy_get', 'mcp_server_policy_set', 'mcp_server_call', 'session_bypass']);
+    const filtered = signetTools.filter(t => !skip.has(t.name));
+
+    const memoryTools = filtered.filter(t => t.name.startsWith('memory_'));
+    const knowledgeTools = filtered.filter(t => t.name.startsWith('knowledge_') || t.name === 'lcm_expand');
+    const otherTools = filtered.filter(t =>
+      !t.name.startsWith('memory_') && !t.name.startsWith('knowledge_') && t.name !== 'lcm_expand'
+    );
+
+    if (memoryTools.length > 0) {
+      sections.push('', '*Memory*');
+      for (const t of memoryTools) sections.push(fmt(t));
+    }
+    if (knowledgeTools.length > 0) {
+      sections.push('', '*Knowledge Graph*');
+      for (const t of knowledgeTools) sections.push(fmt(t));
+    }
+    if (otherTools.length > 0) {
+      sections.push('', '*Secrets & Other*');
+      for (const t of otherTools) sections.push(fmt(t));
+    }
+  }
+
+  const result = sections.join('\n');
+  // Only cache if all MCP sources responded — don't cache partial results
+  const signetExpected = fs.existsSync(signetProxyPath);
+  if (!signetExpected || signetTools.length > 0) {
+    cachedToolList = result;
+  }
+  return result;
 }
 
 // Bot pool for agent teams: send-only Api instances (no polling)
@@ -390,35 +547,34 @@ export class TelegramChannel implements Channel {
       ctx.reply(sections.join('\n'));
     });
 
-    this.bot.command('tools', (ctx) => {
-      const sections = [
-        'Core Tools:',
-        'Bash - Run shell commands',
-        'Read - Read files (text, images, PDFs)',
-        'Write - Create new files',
-        'Edit - Modify existing files',
-        'Glob - Find files by pattern',
-        'Grep - Search file contents',
-        '',
-        'Web Tools:',
-        'WebSearch - Search the web',
-        'WebFetch - Fetch content from URLs',
-        '',
-        'Orchestration Tools:',
-        'Task - Create background tasks',
-        'TeamCreate - Create agent teams',
-        'SendMessage - Message between agents',
-        '',
-        'NanoClaw Tools (mcp):',
-        'send_message - Send a message to the chat',
-        'screenshot - Capture the phone screen',
-        'read_pdf - Extract text from PDF files or URLs',
-        'schedule_task - Schedule recurring/one-time tasks',
-        'list_tasks - List scheduled tasks',
-        'pause/resume/cancel/update_task - Manage tasks',
-        'register_group - Register a new chat group',
-      ];
-      ctx.reply(sections.join('\n'));
+    this.bot.command('tools', async (ctx) => {
+      try {
+        const toolList = await getToolList();
+        const chatId = ctx.chat.id;
+        // Split if over Telegram's 4096 char limit
+        const MAX = 4096;
+        if (toolList.length <= MAX) {
+          await sendTelegramMessage(this.bot!.api, chatId, toolList);
+        } else {
+          const chunks: string[] = [];
+          let current = '';
+          for (const line of toolList.split('\n')) {
+            if (current.length + line.length + 1 > MAX) {
+              chunks.push(current);
+              current = line;
+            } else {
+              current += (current ? '\n' : '') + line;
+            }
+          }
+          if (current) chunks.push(current);
+          for (const chunk of chunks) {
+            await sendTelegramMessage(this.bot!.api, chatId, chunk);
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Failed to query tool list');
+        ctx.reply('Failed to load tool list. Try again later.');
+      }
     });
 
     // Telegram bot commands handled above — skip them in the general handler

@@ -41,8 +41,8 @@ const server = new McpServer({
 });
 
 server.tool(
-  'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
+  'send_chat_message',
+  "Send a message to the user or group chat immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
     text: z.string().describe('The message text to send'),
     sender: z
@@ -90,7 +90,7 @@ If unsure which mode to use, you can ask the user. Examples:
 - "Follow up on my request" \u2192 group (needs to know what was requested)
 - "Generate a daily report" \u2192 isolated (just needs instructions in prompt)
 
-MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It can also use send_message for immediate delivery, or wrap output in <internal> tags to suppress it. Include guidance in the prompt about whether the agent should:
+MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It can also use send_chat_message for immediate delivery, or wrap output in <internal> tags to suppress it. Include guidance in the prompt about whether the agent should:
 \u2022 Always send a message (e.g., reminders, daily briefings)
 \u2022 Only send a message when there's something to report (e.g., "notify me if...")
 \u2022 Never send a message (background maintenance tasks)
@@ -755,10 +755,12 @@ function writeMessageFile(
 }
 
 server.tool(
-  'remote_message',
-  `Send a message to another NanoClaw agent (local or on a remote host). Messages are delivered via IPC for service agents (real-time injection into active session) or via inbox for dev agents (checked on demand).
+  'send_agent_message',
+  `Send a message to another NanoClaw agent (local or on a remote host).
 
-Use this to coordinate work, share findings, or request help from agents on other instances.`,
+Delivery depends on target type:
+- Service agents: IPC injection (one-way). To get a reply, the service agent must call send_agent_message back.
+- Dev agents: claude -c -p (synchronous). The dev agent's response is returned inline as this tool's result — do NOT call send_agent_message to reply, your output IS the reply.`,
   {
     target: z
       .string()
@@ -856,77 +858,6 @@ Use this to coordinate work, share findings, or request help from agents on othe
           {
             type: 'text' as const,
             text: `Failed to send to ${args.target}: ${err instanceof Error ? err.message : String(err)}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-  },
-);
-
-server.tool(
-  'check_inbox',
-  'Check for messages from other agents. Returns all unread messages and marks them as read.',
-  {},
-  async () => {
-    const inboxDir = path.join(NANOCLAW_ROOT, 'data', 'inbox');
-    const readDir = path.join(inboxDir, 'read');
-
-    try {
-      if (!fs.existsSync(inboxDir)) {
-        return {
-          content: [{ type: 'text' as const, text: 'No messages.' }],
-        };
-      }
-
-      const files = fs
-        .readdirSync(inboxDir)
-        .filter((f) => f.endsWith('.json'))
-        .sort();
-
-      if (files.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: 'No messages.' }],
-        };
-      }
-
-      const messages: string[] = [];
-      fs.mkdirSync(readDir, { recursive: true });
-
-      for (const file of files) {
-        const filepath = path.join(inboxDir, file);
-        try {
-          const data = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-          const time = data.timestamp
-            ? new Date(data.timestamp).toLocaleString()
-            : 'unknown';
-          messages.push(
-            `[${time}] From ${data.from_agent || data.from || 'unknown'}:\n${data.message}`,
-          );
-          // Move to read
-          fs.renameSync(filepath, path.join(readDir, file));
-        } catch {
-          // Skip corrupt files
-        }
-      }
-
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text:
-              messages.length > 0
-                ? `${messages.length} message(s):\n\n${messages.join('\n\n---\n\n')}`
-                : 'No messages.',
-          },
-        ],
-      };
-    } catch (err) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Error checking inbox: ${err instanceof Error ? err.message : String(err)}`,
           },
         ],
         isError: true,

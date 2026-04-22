@@ -525,10 +525,10 @@ async function runQuery(
           },
         },
         signet: {
-          command: 'bun',
+          command: 'node',
           args: [path.join(
-            process.env.HOME || '/data/data/com.termux/files/home',
-            '.bun/install/global/node_modules/signetai/dist/mcp-stdio.js',
+            process.env.NANOCLAW_DIR || path.join(process.env.HOME || '/data/data/com.termux/files/home', 'nanoclaw'),
+            'scripts/mcp/signet-filtered.mjs',
           )],
           env: {
             SIGNET_AGENT_ID: containerInput.groupFolder,

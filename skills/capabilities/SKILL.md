@@ -33,7 +33,8 @@ Read the allowed tools from your SDK configuration. You always have access to:
 ### 3. MCP server tools
 
 The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
-- `send_message` — send a message to the user/group
+- `send_chat_message` — send a message to the user/group chat
+- `send_agent_message` — send a message to another agent
 - `schedule_task` — schedule a recurring or one-time task
 - `list_tasks` — list scheduled tasks
 - `pause_task` — pause a scheduled task
@@ -75,7 +76,7 @@ Present the report as a clean, readable message. Example:
 • Core: Bash, Read, Write, Edit, Glob, Grep
 • Web: WebSearch, WebFetch
 • Orchestration: Task, TeamCreate, SendMessage
-• MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
+• MCP: send_chat_message, send_agent_message, list_agents, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
 
 *Bash Tools:*
 • agent-browser: available/not found

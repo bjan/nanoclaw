@@ -41,13 +41,6 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Agent issues, logs, troubleshooting |
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
-
-## Contributing
-
-Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
 
 ## Development
 
@@ -68,16 +61,6 @@ sv restart nanoclaw
 sv up nanoclaw      # start
 sv down nanoclaw    # stop
 # Logs: tail -f $PREFIX/var/log/sv/nanoclaw/current
-
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
-
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
 ```
 
 Quick rebuild shortcut: `./rebuild` (runs tsc + sv restart nanoclaw)
@@ -109,18 +92,17 @@ Code: `TelegramChannel.connect()` in `src/channels/telegram.ts`, `discoverSkillC
 ## MCP Tools
 
 All MCP tools are defined in `container/agent-runner/src/ipc-mcp-stdio.ts` and available as `mcp__nanoclaw__*`:
-- `send_message` — send chat messages (with optional `sender` for swarm bots)
+- `send_chat_message` — send a message to the user/group chat (with optional `sender` for swarm bots)
+- `send_agent_message` — send a message to another agent (local or remote via SSH)
+- `list_agents` — list all known agents across instances
 - `screenshot` — capture phone screen (root screencap + resize). Also `~/bin/screenshot` CLI.
 - `read_pdf` — extract text from local PDFs or URLs (pdftotext). Also `~/bin/pdf-reader` CLI.
 - `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `update_task` — task scheduling
 - `register_group` — register new chat groups (main only)
-- `remote_message` — send message to another agent (local or remote via SSH)
-- `check_inbox` — read incoming messages from other agents
-- `list_agents` — list all known agents across instances
 
 ## Cross-Instance Communication
 
-Agents across hosts (phone + nix) communicate via `remote_message` MCP tool or `scripts/remote-message` CLI.
+Agents across hosts (phone + nix) communicate via `send_agent_message` MCP tool or `scripts/remote-message` CLI.
 All paths deliver messages with full session context and trigger an immediate response.
 
 - **Service agents** (telegram_main): orchestrator receives an `inject` IPC message, pipes it into the active session or wakes a new one if the agent is idle
@@ -128,7 +110,7 @@ All paths deliver messages with full session context and trigger an immediate re
 - Remote hosts use SSH; local agents use direct filesystem writes
 - Config: `data/agents.json` (per-instance, not in git — has `"self"` field for sender identity like `dev@phone`, `dev@nix`)
 - CLI wrappers on Termux in `~/bin/` (set `NANOCLAW_DIR`); on nix symlinked directly
-- Code: `remote_message`, `check_inbox`, `list_agents` in `container/agent-runner/src/ipc-mcp-stdio.ts`; `inject` handler in `src/ipc.ts`; wake-up logic in `src/index.ts`
+- Code: `send_agent_message`, `list_agents` in `container/agent-runner/src/ipc-mcp-stdio.ts`; `inject` handler in `src/ipc.ts`; wake-up logic in `src/index.ts`
 
 ## Model Switching
 
@@ -140,7 +122,7 @@ Users can switch models per-group via `/model` in Telegram. Model registry is in
 ## Telegram Bot Pool (Agent Swarm)
 
 `TELEGRAM_BOT_POOL` in `.env` contains comma-separated tokens for send-only pool bots.
-Pool bots are used when agents call `send_message` with a `sender` parameter on `tg:` JIDs.
+Pool bots are used when agents call `send_chat_message` with a `sender` parameter on `tg:` JIDs.
 Each sender gets a stable pool bot assignment (round-robin), renamed via `setMyName`.
 Code: `initBotPool()` and `sendPoolMessage()` in `src/channels/telegram.ts`, IPC routing in `src/ipc.ts`.
 
@@ -170,7 +152,3 @@ Proactively store anything significant to memory — user preferences, decisions
 - `/tmp` is not writable — use `$HOME` or `$PREFIX/tmp` for temp files
 - Root-owned files (e.g. from `su -c screencap`) need `su -c "rm ..."` to clean up
 - Telegram Markdown v1 is fragile — use plain text for bot command responses to avoid parse errors
-
-## Troubleshooting
-
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.

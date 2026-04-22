@@ -91,34 +91,38 @@ group = a.get('group', '')
 if atype == 'service' and group:
     directory = f'{ncdir}/data/ipc/{group}/messages'
     payload = json.dumps({'type': 'inject', 'targetGroup': group, 'text': f'[From {sender}] {message}'}, indent=2)
+    print(f'{host}|{directory}|service')
+    print(payload)
 else:
-    directory = f'{ncdir}/data/inbox'
-    import datetime
-    payload = json.dumps({
-        'from_agent': sender,
-        'message': message,
-        'timestamp': datetime.datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z')
-    }, indent=2)
-
-# Output: host|directory|type|payload
-print(f'{host}|{directory}|{atype}')
-print(payload)
+    # Dev agent: use claude -c -p
+    print(f'{host}|{ncdir}|dev')
 " "$TARGET" "$MESSAGE" "$SENDER")
 
 # Parse result
 HEADER=$(echo "$RESULT" | head -1)
-PAYLOAD=$(echo "$RESULT" | tail -n +2)
 
 IFS='|' read -r HOST DIR TYPE <<< "$HEADER"
 
-if [[ "$HOST" == "localhost" ]]; then
-  mkdir -p "$DIR"
-  TMPFILE="$DIR/$FILENAME.tmp"
-  echo "$PAYLOAD" > "$TMPFILE"
-  mv "$TMPFILE" "$DIR/$FILENAME"
-else
-  echo "$PAYLOAD" | ssh "$HOST" "mkdir -p '$DIR' && cat > '$DIR/$FILENAME.tmp' && mv '$DIR/$FILENAME.tmp' '$DIR/$FILENAME'"
-fi
+FULL_MESSAGE="[From $SENDER] $MESSAGE"
 
-DELIVERY=$([[ "$TYPE" == "service" ]] && echo "IPC injection" || echo "inbox")
-echo "Message delivered to $TARGET ($DELIVERY)"
+if [[ "$TYPE" == "service" ]]; then
+  # Service agent: write inject IPC file
+  PAYLOAD=$(echo "$RESULT" | tail -n +2)
+  if [[ "$HOST" == "localhost" ]]; then
+    mkdir -p "$DIR"
+    TMPFILE="$DIR/$FILENAME.tmp"
+    echo "$PAYLOAD" > "$TMPFILE"
+    mv "$TMPFILE" "$DIR/$FILENAME"
+  else
+    echo "$PAYLOAD" | ssh -o ConnectTimeout=10 "$HOST" "mkdir -p '$DIR' && cat > '$DIR/$FILENAME.tmp' && mv '$DIR/$FILENAME.tmp' '$DIR/$FILENAME'"
+  fi
+  echo "Message delivered to $TARGET (IPC injection)" >&2
+else
+  # Dev agent: send via claude -c -p (resumes most recent session)
+  ESCAPED_MSG=$(printf '%s' "$FULL_MESSAGE" | sed "s/'/'\\\\''/g")
+  if [[ "$HOST" == "localhost" ]]; then
+    cd "$DIR" && claude -c -p "$ESCAPED_MSG"
+  else
+    ssh -o ConnectTimeout=10 "$HOST" "cd '$DIR' && claude -c -p '$ESCAPED_MSG'"
+  fi
+fi

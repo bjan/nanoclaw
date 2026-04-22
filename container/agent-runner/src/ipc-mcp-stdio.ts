@@ -811,20 +811,50 @@ Use this to coordinate work, share findings, or request help from agents on othe
           text: `[From ${groupFolder}] ${args.message}`,
         };
         writeMessageFile(agent.host, messagesDir, ipcData);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Message delivered to ${args.target} (agent will wake if not active).`,
+            },
+          ],
+        };
       } else {
-        // Dev agent: write to inbox directory
-        const inboxDir = path.join(agent.nanoclaw_dir, 'data', 'inbox');
-        writeMessageFile(agent.host, inboxDir, envelope);
-      }
+        // Dev agent: send via claude -c -p (resumes most recent session)
+        const prefix = `[From ${groupFolder}]`;
+        const fullMessage = `${prefix} ${args.message}`;
+        let response: string;
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Message delivered to ${args.target} (${agent.type === 'service' ? 'IPC injection' : 'inbox'}).`,
-          },
-        ],
-      };
+        if (agent.host === 'localhost') {
+          response = execFileSync('bash', ['-c', `cd '${agent.nanoclaw_dir}' && claude -c -p '${fullMessage.replace(/'/g, "'\\''")}'`], {
+            timeout: 300000,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024,
+          });
+        } else {
+          response = execFileSync('ssh', [
+            '-o', 'ConnectTimeout=10',
+            agent.host,
+            `cd '${agent.nanoclaw_dir}' && claude -c -p '${fullMessage.replace(/'/g, "'\\''")}'`,
+          ], {
+            timeout: 300000,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024,
+          });
+        }
+
+        const trimmed = response.trim();
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: trimmed
+                ? `Response from ${args.target}:\n\n${trimmed}`
+                : `Message delivered to ${args.target} (no response).`,
+            },
+          ],
+        };
+      }
     } catch (err) {
       return {
         content: [

@@ -534,6 +534,7 @@ async function runQuery(
             SIGNET_AGENT_ID: containerInput.groupFolder,
             SIGNET_HOST: '127.0.0.1',
             SIGNET_PORT: '3850',
+            SIGNET_DIST: process.env.SIGNET_DIST || path.join(process.env.HOME || '/data/data/com.termux/files/home', 'signetai/packages/signetai/dist'),
           },
         },
       },

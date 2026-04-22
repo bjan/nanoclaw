@@ -14,7 +14,8 @@ const BLOCKED_TOOLS = new Set([
 ]);
 
 const HOME = process.env.HOME || '/data/data/com.termux/files/home';
-const signetPath = join(HOME, '.bun/install/global/node_modules/signetai/dist/mcp-stdio.js');
+const signetDist = process.env.SIGNET_DIST || join(HOME, 'signetai/packages/signetai/dist');
+const signetPath = join(signetDist, 'mcp-stdio.js');
 
 const bunPath = join(HOME, '.bun/bin/bun');
 const child = spawn(bunPath, [signetPath], {

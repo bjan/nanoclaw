@@ -121,11 +121,14 @@ All MCP tools are defined in `container/agent-runner/src/ipc-mcp-stdio.ts` and a
 ## Cross-Instance Communication
 
 Agents across hosts (phone + nix) communicate via `remote_message` MCP tool or `scripts/remote-message` CLI.
-- **Service agents** (telegram_main): messages injected via IPC input dir (real-time, into active session)
-- **Dev agents** (root nanoclaw): messages delivered to `data/inbox/` (checked via `check_inbox` or `scripts/check-inbox`)
+All paths deliver messages with full session context and trigger an immediate response.
+
+- **Service agents** (telegram_main): orchestrator receives an `inject` IPC message, pipes it into the active session or wakes a new one if the agent is idle
+- **Dev agents** (Claude Code sessions): `claude -c -p` via SSH resumes the most recent session; response is returned to the sender
 - Remote hosts use SSH; local agents use direct filesystem writes
-- Config: `data/agents.json` (per-instance, not in git — different hosts have different local/remote mappings)
+- Config: `data/agents.json` (per-instance, not in git — has `"self"` field for sender identity like `dev@phone`, `dev@nix`)
 - CLI wrappers on Termux in `~/bin/` (set `NANOCLAW_DIR`); on nix symlinked directly
+- Code: `remote_message`, `check_inbox`, `list_agents` in `container/agent-runner/src/ipc-mcp-stdio.ts`; `inject` handler in `src/ipc.ts`; wake-up logic in `src/index.ts`
 
 ## Model Switching
 

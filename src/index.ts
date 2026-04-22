@@ -170,7 +170,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   if (!fs.existsSync(groupMdFile)) {
     const templateFile = path.join(
       GROUPS_DIR,
-      group.isMain ? 'main' : 'global',
+      'global',
       'CLAUDE.md',
     );
     if (fs.existsSync(templateFile)) {

@@ -144,6 +144,25 @@ Pool bots are used when agents call `send_message` with a `sender` parameter on 
 Each sender gets a stable pool bot assignment (round-robin), renamed via `setMyName`.
 Code: `initBotPool()` and `sendPoolMessage()` in `src/channels/telegram.ts`, IPC routing in `src/ipc.ts`.
 
+## SignetAI Memory
+
+SignetAI runs as a daemon on `localhost:3850`, providing persistent memory across sessions.
+
+- **Config**: `~/.agents/agent.yaml`
+- **Database**: `~/.agents/memory/memories.db`
+- **CLI**: `signet status`, `signet daemon restart`
+- **Dashboard**: `http://localhost:3850`
+- **Embeddings**: OpenAI `text-embedding-3-large` (API key in signet secrets)
+- **Extraction/Synthesis**: `codex` provider, `gpt-5.4-mini` model
+
+Two agents share the daemon:
+- `default` — Claude Code dev sessions (hooks in `~/.claude/settings.json`)
+- `telegram_main` — NanoClaw Telegram agent (MCP server in agent-runner, `SIGNET_AGENT_ID=telegram_main`)
+
+Agent-runner mounts `signet-mcp` alongside `nanoclaw` MCP in `container/agent-runner/src/index.ts`. Tools are `mcp__signet__*` (memory_store, memory_recall, memory_search, knowledge graph, etc.).
+
+Proactively store anything significant to memory — user preferences, decisions, project context, corrections. When recalling, search before assuming. Memory is cheap; forgetting is expensive.
+
 ## Platform Quirks (Termux/Android)
 
 - `tsc` is not on PATH — use `node node_modules/typescript/bin/tsc`

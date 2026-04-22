@@ -38,14 +38,37 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in your group directory. Use this for notes, research, or anything that should persist.
 
-## Memory
+## Memory (SignetAI)
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+You have persistent memory via `mcp__signet__*` tools. Use it proactively — don't wait to be asked.
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
+### When to store memories
+
+Save to memory (`mcp__signet__memory_store`) whenever you learn something that would be useful in future sessions:
+
+- User preferences, habits, communication style
+- Facts about the user (name, location, work, interests, relationships)
+- Decisions made and why ("chose X over Y because...")
+- Project context, goals, deadlines
+- Recurring requests or patterns
+- Corrections ("user said don't do X")
+- Important outcomes ("the migration worked", "the deploy failed because...")
+
+If in doubt, store it. Memory is cheap — forgetting is expensive.
+
+### When to recall memories
+
+Use `mcp__signet__memory_search` or `mcp__signet__memory_recall` before:
+- Responding to questions that might relate to past conversations
+- Making decisions that past preferences should inform
+- Starting work on a project discussed previously
+- Any time the user says "remember", "last time", "we discussed", etc.
+
+### What NOT to store
+
+- Ephemeral task details (intermediate steps, temp file paths)
+- Anything the user explicitly says to forget
+- Raw data dumps — store the insight, not the data
 
 ## Message Formatting
 

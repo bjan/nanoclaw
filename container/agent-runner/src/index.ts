@@ -508,6 +508,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__signet__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -521,6 +522,18 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+          },
+        },
+        signet: {
+          command: 'bun',
+          args: [path.join(
+            process.env.HOME || '/data/data/com.termux/files/home',
+            '.bun/install/global/node_modules/signetai/dist/mcp-stdio.js',
+          )],
+          env: {
+            SIGNET_AGENT_ID: containerInput.groupFolder,
+            SIGNET_HOST: '127.0.0.1',
+            SIGNET_PORT: '3850',
           },
         },
       },

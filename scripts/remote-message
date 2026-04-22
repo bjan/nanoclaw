@@ -89,8 +89,8 @@ atype = a['type']
 group = a.get('group', '')
 
 if atype == 'service' and group:
-    directory = f'{ncdir}/data/ipc/{group}/input'
-    payload = json.dumps({'type': 'message', 'text': f'[From {sender}] {message}'}, indent=2)
+    directory = f'{ncdir}/data/ipc/{group}/messages'
+    payload = json.dumps({'type': 'inject', 'targetGroup': group, 'text': f'[From {sender}] {message}'}, indent=2)
 else:
     directory = f'{ncdir}/data/inbox'
     import datetime

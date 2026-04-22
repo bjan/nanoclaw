@@ -114,6 +114,18 @@ All MCP tools are defined in `container/agent-runner/src/ipc-mcp-stdio.ts` and a
 - `read_pdf` — extract text from local PDFs or URLs (pdftotext). Also `~/bin/pdf-reader` CLI.
 - `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `update_task` — task scheduling
 - `register_group` — register new chat groups (main only)
+- `remote_message` — send message to another agent (local or remote via SSH)
+- `check_inbox` — read incoming messages from other agents
+- `list_agents` — list all known agents across instances
+
+## Cross-Instance Communication
+
+Agents across hosts (phone + nix) communicate via `remote_message` MCP tool or `scripts/remote-message` CLI.
+- **Service agents** (telegram_main): messages injected via IPC input dir (real-time, into active session)
+- **Dev agents** (root nanoclaw): messages delivered to `data/inbox/` (checked via `check_inbox` or `scripts/check-inbox`)
+- Remote hosts use SSH; local agents use direct filesystem writes
+- Config: `data/agents.json` (per-instance, not in git — different hosts have different local/remote mappings)
+- CLI wrappers on Termux in `~/bin/` (set `NANOCLAW_DIR`); on nix symlinked directly
 
 ## Model Switching
 

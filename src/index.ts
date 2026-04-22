@@ -795,6 +795,32 @@ async function main(): Promise<void> {
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
+    injectMessage: (groupFolder, text) => {
+      // Resolve folder → JID
+      const jid = Object.entries(registeredGroups).find(
+        ([, g]) => g.folder === groupFolder,
+      )?.[0];
+      if (!jid) {
+        logger.warn({ groupFolder }, 'inject: unknown group folder');
+        return;
+      }
+      // Try piping into active agent; if none is active, wake one up
+      if (!queue.sendMessage(jid, text)) {
+        // Store as a synthetic incoming message so the agent sees it
+        storeMessage({
+          id: `inject-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          chat_jid: jid,
+          sender: 'system',
+          sender_name: 'Remote Agent',
+          content: text,
+          timestamp: new Date().toISOString(),
+          is_from_me: false,
+          is_bot_message: false,
+        });
+        queue.enqueueMessageCheck(jid);
+        logger.info({ jid, groupFolder }, 'inject: woke agent for message');
+      }
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {

@@ -793,16 +793,24 @@ Use this to coordinate work, share findings, or request help from agents on othe
 
     try {
       if (agent.type === 'service' && agent.group) {
-        // Service agent: inject into IPC input directory (real-time)
-        const inputDir = path.join(
+        // Service agent: write an 'inject' IPC message to the orchestrator.
+        // The orchestrator pipes it into the active agent session if one is
+        // running, or wakes up a new agent session if the agent is asleep.
+        // We write to the target group's IPC messages/ dir (watched by the
+        // orchestrator), NOT the input/ dir (only watched by a running agent).
+        const messagesDir = path.join(
           agent.nanoclaw_dir,
           'data',
           'ipc',
           agent.group,
-          'input',
+          'messages',
         );
-        const ipcData = { type: 'message', text: `[From ${groupFolder}] ${args.message}` };
-        writeMessageFile(agent.host, inputDir, ipcData);
+        const ipcData = {
+          type: 'inject',
+          targetGroup: agent.group,
+          text: `[From ${groupFolder}] ${args.message}`,
+        };
+        writeMessageFile(agent.host, messagesDir, ipcData);
       } else {
         // Dev agent: write to inbox directory
         const inboxDir = path.join(agent.nanoclaw_dir, 'data', 'inbox');

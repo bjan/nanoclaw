@@ -13,6 +13,8 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  /** Inject a message into a group's agent session. Wakes the agent if not active. */
+  injectMessage: (groupFolder: string, text: string) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -103,6 +105,19 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (
+                data.type === 'inject' &&
+                data.targetGroup &&
+                data.text
+              ) {
+                // Inject a message into a target group's agent session.
+                // If the agent is active, the message is piped into the
+                // running conversation. If not, the agent is woken up.
+                deps.injectMessage(data.targetGroup, data.text);
+                logger.info(
+                  { targetGroup: data.targetGroup, sourceGroup },
+                  'IPC inject: message delivered to agent',
+                );
               }
               fs.unlinkSync(filePath);
             } catch (err) {

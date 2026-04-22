@@ -715,12 +715,12 @@ interface AgentEntry {
   description?: string;
 }
 
-function loadAgents(): Record<string, AgentEntry> {
+function loadAgentsConfig(): { self: string; agents: Record<string, AgentEntry> } {
   try {
-    const raw = fs.readFileSync(AGENTS_CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw).agents || {};
+    const raw = JSON.parse(fs.readFileSync(AGENTS_CONFIG_PATH, 'utf-8'));
+    return { self: raw.self || 'unknown', agents: raw.agents || {} };
   } catch {
-    return {};
+    return { self: 'unknown', agents: {} };
   }
 }
 
@@ -768,11 +768,13 @@ Use this to coordinate work, share findings, or request help from agents on othe
     message: z.string().describe('The message to send'),
   },
   async (args) => {
-    const agents = loadAgents();
-    const agent = agents[args.target];
+    const config = loadAgentsConfig();
+    const agent = config.agents[args.target];
+    // Sender identity: group folder for service agents, "dev@host" for dev agents
+    const selfId = groupFolder === 'dev' ? `dev@${config.self}` : `${groupFolder}@${config.self}`;
 
     if (!agent) {
-      const available = Object.keys(agents).join(', ');
+      const available = Object.keys(config.agents).join(', ');
       return {
         content: [
           {
@@ -783,13 +785,6 @@ Use this to coordinate work, share findings, or request help from agents on othe
         isError: true,
       };
     }
-
-    const envelope = {
-      from: `${groupFolder}@${agent.host === 'localhost' ? 'local' : 'remote'}`,
-      from_agent: groupFolder,
-      message: args.message,
-      timestamp: new Date().toISOString(),
-    };
 
     try {
       if (agent.type === 'service' && agent.group) {
@@ -808,7 +803,7 @@ Use this to coordinate work, share findings, or request help from agents on othe
         const ipcData = {
           type: 'inject',
           targetGroup: agent.group,
-          text: `[From ${groupFolder}] ${args.message}`,
+          text: `[From ${selfId}] ${args.message}`,
         };
         writeMessageFile(agent.host, messagesDir, ipcData);
         return {
@@ -945,7 +940,7 @@ server.tool(
   'List all known agents across all NanoClaw instances.',
   {},
   async () => {
-    const agents = loadAgents();
+    const agents = loadAgentsConfig().agents;
     const entries = Object.entries(agents);
 
     if (entries.length === 0) {

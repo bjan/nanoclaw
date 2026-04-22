@@ -64,18 +64,22 @@ if [[ -z "$MESSAGE" ]]; then
 fi
 
 # Parse agent config and build the JSON payload with python3 (handles escaping properly)
-SENDER="${NANOCLAW_GROUP_FOLDER:-dev@${HOSTNAME:-phone}}"
 FILENAME="$(date +%s)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n').json"
 
 RESULT=$(python3 -c "
-import json, sys
+import json, sys, os
 
 with open('$CONFIG') as f:
-    agents = json.load(f).get('agents', {})
+    config = json.load(f)
+    agents = config.get('agents', {})
+    self_host = config.get('self', 'unknown')
 
 target = sys.argv[1]
 message = sys.argv[2]
-sender = sys.argv[3]
+
+# Build sender identity from config
+group_folder = os.environ.get('NANOCLAW_GROUP_FOLDER', '')
+sender = f'{group_folder}@{self_host}' if group_folder else f'dev@{self_host}'
 
 a = agents.get(target)
 if not a:
@@ -91,17 +95,17 @@ group = a.get('group', '')
 if atype == 'service' and group:
     directory = f'{ncdir}/data/ipc/{group}/messages'
     payload = json.dumps({'type': 'inject', 'targetGroup': group, 'text': f'[From {sender}] {message}'}, indent=2)
-    print(f'{host}|{directory}|service')
+    print(f'{host}|{directory}|service|{sender}')
     print(payload)
 else:
     # Dev agent: use claude -c -p
-    print(f'{host}|{ncdir}|dev')
-" "$TARGET" "$MESSAGE" "$SENDER")
+    print(f'{host}|{ncdir}|dev|{sender}')
+" "$TARGET" "$MESSAGE")
 
 # Parse result
 HEADER=$(echo "$RESULT" | head -1)
 
-IFS='|' read -r HOST DIR TYPE <<< "$HEADER"
+IFS='|' read -r HOST DIR TYPE SENDER <<< "$HEADER"
 
 FULL_MESSAGE="[From $SENDER] $MESSAGE"
 

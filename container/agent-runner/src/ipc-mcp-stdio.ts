@@ -817,9 +817,19 @@ Delivery depends on target type:
           ],
         };
       } else {
-        // Dev agent: send via claude -c -p (resumes most recent session)
+        // Dev agent: send via claude -c -p (resumes most recent session).
+        // The agent-runner runs with HOME redirected to the per-group sessions
+        // dir, but the dev agent's claude config (settings.json, signet hooks,
+        // session jsonls) lives under the user's real home. Restore HOME and
+        // drop CLAUDE_CONFIG_DIR so the child claude reads the host's config.
+        // Locally this fixes config resolution; for SSH, it also lets the
+        // local ssh client find the user's ~/.ssh/config and keys.
         const prefix = `[From ${groupFolder}]`;
         const fullMessage = `${prefix} ${args.message}`;
+        const hostHome = process.env.NANOCLAW_HOST_HOME;
+        const childEnv = { ...process.env };
+        if (hostHome) childEnv.HOME = hostHome;
+        delete childEnv.CLAUDE_CONFIG_DIR;
         let response: string;
 
         if (agent.host === 'localhost') {
@@ -827,6 +837,7 @@ Delivery depends on target type:
             timeout: 300000,
             encoding: 'utf-8',
             maxBuffer: 10 * 1024 * 1024,
+            env: childEnv,
           });
         } else {
           response = execFileSync('ssh', [
@@ -837,6 +848,7 @@ Delivery depends on target type:
             timeout: 300000,
             encoding: 'utf-8',
             maxBuffer: 10 * 1024 * 1024,
+            env: childEnv,
           });
         }
 

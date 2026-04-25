@@ -129,6 +129,7 @@ function prepareAgentEnvironment(
   const extraDir = path.join(groupDir, 'extra');
 
   // Build env for the native agent process
+  const hostHome = process.env.HOME || '';
   const env: Record<string, string | undefined> = {
     ...process.env,
     TZ: TIMEZONE,
@@ -138,6 +139,7 @@ function prepareAgentEnvironment(
     NANOCLAW_GROUP_DIR: groupDir,
     NANOCLAW_GLOBAL_DIR: globalDir,
     NANOCLAW_EXTRA_DIR: extraDir,
+    NANOCLAW_HOST_HOME: hostHome,
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
   };
 

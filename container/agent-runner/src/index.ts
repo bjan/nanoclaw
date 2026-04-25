@@ -527,14 +527,15 @@ async function runQuery(
         signet: {
           command: 'node',
           args: [path.join(
-            process.env.NANOCLAW_DIR || path.join(process.env.HOME || '/data/data/com.termux/files/home', 'nanoclaw'),
+            process.env.NANOCLAW_DIR || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'nanoclaw'),
             'scripts/mcp/signet-filtered.mjs',
           )],
           env: {
             SIGNET_AGENT_ID: containerInput.groupFolder,
             SIGNET_HOST: '127.0.0.1',
             SIGNET_PORT: '3850',
-            SIGNET_DIST: process.env.SIGNET_DIST || path.join(process.env.HOME || '/data/data/com.termux/files/home', 'signetai/packages/signetai/dist'),
+            SIGNET_DIST: process.env.SIGNET_DIST || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'signetai/packages/signetai/dist'),
+            NANOCLAW_HOST_HOME: process.env.NANOCLAW_HOST_HOME || process.env.HOME || '',
           },
         },
       },

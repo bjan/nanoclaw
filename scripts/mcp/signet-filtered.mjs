@@ -13,7 +13,7 @@ const BLOCKED_TOOLS = new Set([
   'agent_message_inbox',
 ]);
 
-const HOME = process.env.HOME || '/data/data/com.termux/files/home';
+const HOME = process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home';
 const signetDist = process.env.SIGNET_DIST || join(HOME, 'signetai/packages/signetai/dist');
 const signetPath = join(signetDist, 'mcp-stdio.js');
 

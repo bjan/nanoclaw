@@ -82,6 +82,7 @@ Built-in bot commands handled directly by the Telegram channel (no agent invocat
 - `/effort` — set reasoning effort (low/medium/high)
 - `/plan` — toggle plan-before-execute mode
 - `/skills` — list available commands and skills
+- `/tools` — list available agent MCP tools
 - `/compact` — handled by session-commands at orchestrator level (SDK compaction)
 - `/chatid`, `/ping` — utility commands
 

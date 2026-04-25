@@ -772,8 +772,7 @@ Delivery depends on target type:
   async (args) => {
     const config = loadAgentsConfig();
     const agent = config.agents[args.target];
-    // Sender identity: group folder for service agents, "dev@host" for dev agents
-    const selfId = groupFolder === 'dev' ? `dev@${config.self}` : `${groupFolder}@${config.self}`;
+    const selfId = `${config.self}:${groupFolder}`;
 
     if (!agent) {
       const available = Object.keys(config.agents).join(', ');
@@ -824,7 +823,7 @@ Delivery depends on target type:
         // drop CLAUDE_CONFIG_DIR so the child claude reads the host's config.
         // Locally this fixes config resolution; for SSH, it also lets the
         // local ssh client find the user's ~/.ssh/config and keys.
-        const prefix = `[From ${groupFolder}]`;
+        const prefix = `[From ${selfId}]`;
         const fullMessage = `${prefix} ${args.message}`;
         const hostHome = process.env.NANOCLAW_HOST_HOME;
         const childEnv = { ...process.env };

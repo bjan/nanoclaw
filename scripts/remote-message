@@ -79,7 +79,7 @@ message = sys.argv[2]
 
 # Build sender identity from config
 group_folder = os.environ.get('NANOCLAW_GROUP_FOLDER', '')
-sender = f'{group_folder}@{self_host}' if group_folder else f'dev@{self_host}'
+sender = f'{self_host}:{group_folder}' if group_folder else f'{self_host}:dev'
 
 a = agents.get(target)
 if not a:

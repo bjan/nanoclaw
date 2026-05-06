@@ -18,10 +18,10 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import {
-  query,
   HookCallback,
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
+import { createBackend } from './backend.js';
 import { fileURLToPath } from 'url';
 
 interface ContainerInput {
@@ -409,6 +409,11 @@ async function runQuery(
   mcpServerPath: string,
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
+  containerConfig: {
+    allowedTools?: string[];
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+    backend?: string;
+  },
   resumeAt?: string,
 ): Promise<{
   newSessionId?: string;
@@ -472,22 +477,6 @@ async function runQuery(
   const effort = (['low', 'medium', 'high', 'max'].includes(effortEnv || '')
     ? effortEnv
     : undefined) as 'low' | 'medium' | 'high' | 'max' | undefined;
-
-  // Load per-group container config (written by orchestrator)
-  const containerConfigPath = path.join(WORKSPACE_IPC, 'container_config.json');
-  let containerConfig: {
-    allowedTools?: string[];
-    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
-    backend?: string;
-  } = {};
-  if (fs.existsSync(containerConfigPath)) {
-    try {
-      containerConfig = JSON.parse(fs.readFileSync(containerConfigPath, 'utf-8'));
-      log(`Loaded container config: ${JSON.stringify(Object.keys(containerConfig))}`);
-    } catch (err) {
-      log(`Failed to parse container config: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
 
   const DEFAULT_ALLOWED_TOOLS = [
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -566,32 +555,34 @@ async function runQuery(
 
   const systemAppend = [globalClaudeMd, signetInject].filter(Boolean).join('\n\n');
 
-  for await (const message of query({
+  const backendName = containerConfig.backend || 'claude-code';
+  const backend = createBackend(backendName);
+  log(`Using backend: ${backend.name}`);
+
+  for await (const message of backend.query({
     prompt: stream,
-    options: {
-      cwd: WORKSPACE_GROUP,
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
-      effort,
-      systemPrompt: systemAppend
-        ? {
-            type: 'preset' as const,
-            preset: 'claude_code' as const,
-            append: systemAppend,
-          }
-        : undefined,
-      allowedTools,
-      env: sdkEnv,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      settingSources: ['project', 'user'],
-      mcpServers,
-      hooks: {
-        PreCompact: [
-          { hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] },
-        ],
-      },
+    cwd: WORKSPACE_GROUP,
+    additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+    resume: sessionId,
+    resumeSessionAt: resumeAt,
+    effort,
+    systemPrompt: systemAppend
+      ? {
+          type: 'preset' as const,
+          preset: 'claude_code' as const,
+          append: systemAppend,
+        }
+      : undefined,
+    allowedTools,
+    env: sdkEnv,
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+    settingSources: ['project', 'user'],
+    mcpServers,
+    hooks: {
+      PreCompact: [
+        { hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] },
+      ],
     },
   })) {
     messageCount++;
@@ -730,6 +721,22 @@ async function main(): Promise<void> {
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
   };
 
+  // Load per-group container config (written by orchestrator)
+  const containerConfigPath = path.join(WORKSPACE_IPC, 'container_config.json');
+  let containerConfig: {
+    allowedTools?: string[];
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+    backend?: string;
+  } = {};
+  if (fs.existsSync(containerConfigPath)) {
+    try {
+      containerConfig = JSON.parse(fs.readFileSync(containerConfigPath, 'utf-8'));
+      log(`Loaded container config: ${JSON.stringify(Object.keys(containerConfig))}`);
+    } catch (err) {
+      log(`Failed to parse container config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
@@ -769,20 +776,20 @@ async function main(): Promise<void> {
     let resultEmitted = false;
 
     try {
-      for await (const message of query({
+      const slashBackend = createBackend(containerConfig.backend || 'claude-code');
+      for await (const message of slashBackend.query({
         prompt: trimmedPrompt,
-        options: {
-          cwd: '/workspace/group',
-          resume: sessionId,
-          systemPrompt: undefined,
-          allowedTools: [],
-          env: sdkEnv,
-          permissionMode: 'bypassPermissions' as const,
-          allowDangerouslySkipPermissions: true,
-          settingSources: ['project', 'user'] as const,
-          hooks: {
-            PreCompact: [{ hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] }],
-          },
+        cwd: WORKSPACE_GROUP,
+        resume: sessionId,
+        systemPrompt: undefined,
+        allowedTools: [],
+        mcpServers: {},
+        env: sdkEnv,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        settingSources: ['project', 'user'],
+        hooks: {
+          PreCompact: [{ hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] }],
         },
       })) {
         const msgType = message.type === 'system'
@@ -890,6 +897,7 @@ async function main(): Promise<void> {
         mcpServerPath,
         containerInput,
         sdkEnv,
+        containerConfig,
         resumeAt,
       );
       if (queryResult.newSessionId) {

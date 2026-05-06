@@ -473,6 +473,72 @@ async function runQuery(
     ? effortEnv
     : undefined) as 'low' | 'medium' | 'high' | 'max' | undefined;
 
+  // Load per-group container config (written by orchestrator)
+  const containerConfigPath = path.join(WORKSPACE_IPC, 'container_config.json');
+  let containerConfig: {
+    allowedTools?: string[];
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+    backend?: string;
+  } = {};
+  if (fs.existsSync(containerConfigPath)) {
+    try {
+      containerConfig = JSON.parse(fs.readFileSync(containerConfigPath, 'utf-8'));
+      log(`Loaded container config: ${JSON.stringify(Object.keys(containerConfig))}`);
+    } catch (err) {
+      log(`Failed to parse container config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const DEFAULT_ALLOWED_TOOLS = [
+    'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch',
+    'Task', 'TaskOutput', 'TaskStop',
+    'TeamCreate', 'TeamDelete', 'SendMessage',
+    'TodoWrite', 'ToolSearch', 'Skill', 'NotebookEdit',
+    'mcp__nanoclaw__*', 'mcp__signet__*',
+  ];
+
+  const allowedTools = containerConfig.allowedTools || DEFAULT_ALLOWED_TOOLS;
+  if (containerConfig.allowedTools) {
+    log(`Using custom allowedTools: ${allowedTools.join(', ')}`);
+  }
+
+  // Build MCP servers: always include nanoclaw + signet, merge any extras from config
+  const baseMcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    signet: {
+      command: 'node',
+      args: [path.join(
+        process.env.NANOCLAW_DIR || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'nanoclaw'),
+        'scripts/mcp/signet-filtered.mjs',
+      )],
+      env: {
+        SIGNET_AGENT_ID: containerInput.groupFolder,
+        SIGNET_HOST: '127.0.0.1',
+        SIGNET_PORT: '3850',
+        SIGNET_DIST: process.env.SIGNET_DIST || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'signetai/packages/signetai/dist'),
+        NANOCLAW_HOST_HOME: process.env.NANOCLAW_HOST_HOME || process.env.HOME || '',
+      },
+    },
+  };
+
+  const mcpServers = { ...baseMcpServers };
+  if (containerConfig.mcpServers) {
+    for (const [name, config] of Object.entries(containerConfig.mcpServers)) {
+      if (name === 'nanoclaw' || name === 'signet') continue;
+      mcpServers[name] = config;
+      log(`Added custom MCP server: ${name}`);
+    }
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -488,57 +554,12 @@ async function runQuery(
             append: globalClaudeMd,
           }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__signet__*',
-      ],
+      allowedTools,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        signet: {
-          command: 'node',
-          args: [path.join(
-            process.env.NANOCLAW_DIR || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'nanoclaw'),
-            'scripts/mcp/signet-filtered.mjs',
-          )],
-          env: {
-            SIGNET_AGENT_ID: containerInput.groupFolder,
-            SIGNET_HOST: '127.0.0.1',
-            SIGNET_PORT: '3850',
-            SIGNET_DIST: process.env.SIGNET_DIST || path.join(process.env.NANOCLAW_HOST_HOME || process.env.HOME || '/data/data/com.termux/files/home', 'signetai/packages/signetai/dist'),
-            NANOCLAW_HOST_HOME: process.env.NANOCLAW_HOST_HOME || process.env.HOME || '',
-          },
-        },
-      },
+      mcpServers,
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.chatJid, containerInput.groupFolder, containerInput.assistantName)] },

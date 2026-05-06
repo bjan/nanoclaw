@@ -125,8 +125,27 @@ function prepareAgentEnvironment(
   const agentRunnerDist = path.join(agentRunnerDir, 'dist');
   const entrypoint = path.join(agentRunnerDist, 'index.js');
 
-  // Extra mount dirs (if any)
+  // Write containerConfig for the agent-runner to read
+  if (group.containerConfig) {
+    fs.writeFileSync(
+      path.join(groupIpcDir, 'container_config.json'),
+      JSON.stringify(group.containerConfig, null, 2) + '\n',
+    );
+  }
+
+  // Wire additionalMounts as symlinks in groups/{folder}/extra/
   const extraDir = path.join(groupDir, 'extra');
+  if (group.containerConfig?.additionalMounts?.length) {
+    fs.mkdirSync(extraDir, { recursive: true });
+    for (const mount of group.containerConfig.additionalMounts) {
+      const hostPath = mount.hostPath.replace(/^~/, process.env.HOME || '');
+      const linkName = mount.containerPath || path.basename(hostPath);
+      const linkPath = path.join(extraDir, linkName);
+      if (!fs.existsSync(linkPath) && fs.existsSync(hostPath)) {
+        try { fs.symlinkSync(hostPath, linkPath); } catch { /* ignore */ }
+      }
+    }
+  }
 
   // Build env for the native agent process
   const hostHome = process.env.HOME || '';

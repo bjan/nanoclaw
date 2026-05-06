@@ -475,6 +475,42 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       .describe(
         'Whether messages must start with the trigger word. Default: false (respond to all messages). Set to true for busy groups with many participants where you only want the agent to respond when explicitly mentioned.',
       ),
+    containerConfig: z
+      .object({
+        allowedTools: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Tools the agent can use. Defaults to full tool list. Use glob patterns like "mcp__nanoclaw__*".',
+          ),
+        mcpServers: z
+          .record(
+            z.string(),
+            z.object({
+              command: z.string(),
+              args: z.array(z.string()),
+              env: z.record(z.string(), z.string()).optional(),
+            }),
+          )
+          .optional()
+          .describe(
+            'Additional MCP servers (merged with nanoclaw + signet, which cannot be overridden).',
+          ),
+        additionalMounts: z
+          .array(
+            z.object({
+              hostPath: z.string().describe('Absolute path on host (supports ~ for home)'),
+              containerPath: z.string().optional().describe('Mount name (defaults to basename)'),
+              readonly: z.boolean().optional().describe('Default: true'),
+            }),
+          )
+          .optional()
+          .describe('Extra directories to mount into the agent workspace.'),
+        timeout: z.number().optional().describe('Agent timeout in ms (default: 300000)'),
+        backend: z.string().optional().describe('Agent backend (default: "claude-code")'),
+      })
+      .optional()
+      .describe('Per-group agent configuration (tools, MCP servers, mounts, backend).'),
   },
   async (args) => {
     if (!isMain) {
@@ -496,6 +532,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       folder: args.folder,
       trigger: args.trigger,
       requiresTrigger: args.requiresTrigger ?? false,
+      containerConfig: args.containerConfig,
       timestamp: new Date().toISOString(),
     };
 

@@ -539,6 +539,33 @@ async function runQuery(
     }
   }
 
+  // Signet SessionStart: inject memories into system prompt for service agents
+  let signetInject: string | undefined;
+  if (!sessionId) {
+    try {
+      const signetRes = await fetch('http://127.0.0.1:3850/api/hooks/session-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          harness: 'nanoclaw',
+          agentId: containerInput.groupFolder,
+          project: WORKSPACE_GROUP,
+        }),
+      });
+      if (signetRes.ok) {
+        const signetData = await signetRes.json() as { inject?: string };
+        if (signetData.inject) {
+          signetInject = signetData.inject;
+          log(`Signet session-start: injected ${signetInject.length} chars`);
+        }
+      }
+    } catch (err) {
+      log(`Signet session-start failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const systemAppend = [globalClaudeMd, signetInject].filter(Boolean).join('\n\n');
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -547,11 +574,11 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       effort,
-      systemPrompt: globalClaudeMd
+      systemPrompt: systemAppend
         ? {
             type: 'preset' as const,
             preset: 'claude_code' as const,
-            append: globalClaudeMd,
+            append: systemAppend,
           }
         : undefined,
       allowedTools,

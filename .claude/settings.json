@@ -1,4 +1,61 @@
 {
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook session-start -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "timeout": 17000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook user-prompt-submit -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "timeout": 7000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook pre-compaction -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/data/data/com.termux/files/home/nanoclaw/scripts/signet-post-compact.sh",
+            "timeout": 20000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook session-end -H claude-code --agent-id dev@phone",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  },
   "sandbox": {
     "network": {
       "allowedDomains": [

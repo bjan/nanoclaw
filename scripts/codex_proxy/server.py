@@ -19,7 +19,7 @@ from .transform import (
     chat_to_responses,
     is_usage_limit_error,
     make_backend_headers,
-    parse_sse_to_text,
+    parse_sse_response,
     sse_to_chat_stream,
 )
 
@@ -146,9 +146,13 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             )
         else:
             raw = (await resp.aread()).decode("utf-8", errors="replace")
-            text = parse_sse_to_text(raw)
+            parsed = parse_sse_response(raw)
             return JSONResponse(
-                build_chat_completion_response(model_name, text),
+                build_chat_completion_response(
+                    model_name,
+                    content=parsed["text"],
+                    tool_calls=parsed["tool_calls"],
+                ),
             )
 
     return JSONResponse(

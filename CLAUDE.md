@@ -45,7 +45,7 @@ Four types of skills exist in NanoClaw:
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Agent issues, logs, troubleshooting |
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/create-agent` | Create a new domain agent from Telegram (guided workflow) |
+| `/create-agent` | Create a new domain agent from Telegram (runtime skill, not a Claude Code skill) |
 
 ## Development
 
@@ -79,11 +79,11 @@ Two hosts run NanoClaw: **phone** (Termux, runit) and **nix** (NixOS, systemd). 
 - Group related changes into logical commits (e.g., separate refactor from feat from docs)
 - Use conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `docs:`
 
-**Syncing to nix after push:**
+**Syncing after push:**
 ```bash
-ssh nix "cd ~/nanoclaw && git pull --ff-only && node node_modules/typescript/bin/tsc && cd container/agent-runner && node ../../node_modules/typescript/bin/tsc && echo '--- BUILD OK ---'"
+~/bin/sync-fleet --nanoclaw-only   # pulls, builds, restarts on both hosts
 ```
-If the service needs restarting on nix: `ssh nix "systemctl --user restart nanoclaw"`
+`sync-fleet` handles both phone and nix. Use `--signet-only` for signetai, no flag for both repos. See `skills/sync-fleet/SKILL.md` for details.
 
 **Common type pitfall:** `TelegramChannelOpts` in `src/channels/telegram.ts` is a separate interface from `ChannelOpts` in `src/channels/registry.ts`. When adding fields to `ChannelOpts`, also add them to `TelegramChannelOpts` if the Telegram channel uses them.
 

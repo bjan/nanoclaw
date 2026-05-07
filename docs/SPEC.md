@@ -85,7 +85,7 @@ A personal Claude assistant with multi-channel support, persistent memory per co
 
 ## Architecture: Channel System
 
-Channels are added via [Claude Code skills](https://code.claude.com/docs/en/skills) (e.g., `/add-telegram`, `/add-whatsapp`). Telegram is included by default; other channels (WhatsApp, Slack, Discord, Gmail) are installed on demand. Channels self-register at startup; installed channels with missing credentials emit a WARN log and are skipped.
+Channels self-register at startup via the channel registry pattern. Each channel lives in `src/channels/` and calls `registerChannel()` at module load. Installed channels with missing credentials emit a WARN log and are skipped.
 
 ### System Diagram
 
@@ -231,7 +231,7 @@ To add a new channel, contribute a skill to `.claude/skills/add-<name>/` that:
 3. Returns `null` from the factory if credentials are missing
 4. Adds an import line to `src/channels/index.ts`
 
-See existing skills (`/add-whatsapp`, `/add-telegram`, `/add-slack`, `/add-discord`, `/add-gmail`) for the pattern.
+See existing channel implementations (`src/channels/telegram.ts`, `src/channels/whatsapp.ts`) for the pattern.
 
 ---
 
@@ -281,14 +281,20 @@ nanoclaw/
 │
 ├── .claude/
 │   └── skills/
-│       ├── setup/SKILL.md              # /setup - First-time installation
-│       ├── customize/SKILL.md          # /customize - Add capabilities
-│       ├── debug/SKILL.md              # /debug - Container debugging
-│       ├── add-telegram/SKILL.md       # /add-telegram - Telegram channel
-│       ├── add-gmail/SKILL.md          # /add-gmail - Gmail integration
-│       ├── add-voice-transcription/    # /add-voice-transcription - Whisper
-│       ├── x-integration/SKILL.md      # /x-integration - X/Twitter
-│       └── add-parallel/SKILL.md       # /add-parallel - Parallel agents
+│       ├── audit-docs/SKILL.md         # /audit-docs - Doc verification
+│       ├── prompt-optimizer/           # /prompt-optimizer - Prompt analysis
+│       └── vibe-code-auditor/          # /vibe-code-auditor - Code audit
+│
+├── skills/                             # Runtime skills (synced into agent sessions)
+│   ├── add-karpathy-llm-wiki/         # Wiki knowledge base
+│   ├── agent-browser/                 # Browser automation
+│   ├── capabilities/                  # Agent capability docs
+│   ├── claw/                          # CLI agent runner
+│   ├── context/                       # Context management
+│   ├── create-agent/                  # Create domain agents
+│   ├── skill-creator/                 # Skill management
+│   ├── status/                        # System status
+│   └── sync-fleet/                    # Fleet sync (phone + nix)
 │
 ├── groups/
 │   ├── CLAUDE.md                  # Global memory (all groups read this)
@@ -630,7 +636,7 @@ The `nanoclaw` MCP server is created dynamically per agent call with the current
 
 ## Deployment
 
-NanoClaw runs as a system service. The `/setup` skill auto-generates a systemd unit via `setup/service.ts`.
+NanoClaw runs as a system service. The setup process generates a systemd unit via `setup/service.ts`.
 
 ### Startup Sequence
 

@@ -29,11 +29,11 @@ print(summary)
     SUMMARY_TRUNCATED=$(echo "$SUMMARY" | head -c 8000)
     signet hook compaction-complete \
       -H claude-code \
-      --agent-id dev@phone \
+      --agent-id phone:dev \
       --project "$CWD" \
       -s "$SUMMARY_TRUNCATED" >/dev/null 2>&1 || true
   fi
 fi
 
 # --- Step 2: Re-inject signet context (like a mini session-start) ---
-signet hook session-start -H claude-code --agent-id dev@phone --project "$CWD" 2>/dev/null || true
+signet hook session-start -H claude-code --agent-id phone:dev --project "$CWD" 2>/dev/null || true

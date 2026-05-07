@@ -1,4 +1,6 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, execSync, type ChildProcess } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { AgentBackend, BackendQueryConfig, BackendMessage, McpServerConfig } from '../backend.js';
@@ -331,7 +333,6 @@ export class CodexBackend implements AgentBackend {
   }
 
   private execBash(command: string, cwd: string): Promise<string> {
-    const { execSync } = require('child_process') as typeof import('child_process');
     try {
       const output = execSync(command, {
         cwd,
@@ -349,7 +350,6 @@ export class CodexBackend implements AgentBackend {
   }
 
   private execReadFile(filePath: string): Promise<string> {
-    const fs = require('fs') as typeof import('fs');
     try {
       return Promise.resolve(fs.readFileSync(filePath, 'utf-8'));
     } catch (err) {
@@ -358,8 +358,6 @@ export class CodexBackend implements AgentBackend {
   }
 
   private execWriteFile(filePath: string, content: string): Promise<string> {
-    const fs = require('fs') as typeof import('fs');
-    const path = require('path') as typeof import('path');
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, content);
@@ -370,7 +368,6 @@ export class CodexBackend implements AgentBackend {
   }
 
   private execEditFile(filePath: string, oldString: string, newString: string): Promise<string> {
-    const fs = require('fs') as typeof import('fs');
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       if (!content.includes(oldString)) {

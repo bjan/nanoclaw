@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "configure-ecc": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "computedHash": "db1b0fca74779d1fdbe26737d69d11f58b18a054d83ae457c05cd3bb1c376e80"
+    },
+    "prompt-optimizer": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "computedHash": "f562081432bee2c19ff19580f62121eadb056420b14e81db0cfb87d8535a9e8a"
+    }
+  }
+}

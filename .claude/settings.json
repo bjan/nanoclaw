@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "signet hook session-start -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "command": "signet hook session-start -H claude-code --agent-id phone:dev --project \"$(pwd)\"",
             "timeout": 17000
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "signet hook user-prompt-submit -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "command": "signet hook user-prompt-submit -H claude-code --agent-id phone:dev --project \"$(pwd)\"",
             "timeout": 7000
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "signet hook pre-compaction -H claude-code --agent-id dev@phone --project \"$(pwd)\"",
+            "command": "signet hook pre-compaction -H claude-code --agent-id phone:dev --project \"$(pwd)\"",
             "timeout": 3000
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "signet hook session-end -H claude-code --agent-id dev@phone",
+            "command": "signet hook session-end -H claude-code --agent-id phone:dev",
             "timeout": 15000
           }
         ]

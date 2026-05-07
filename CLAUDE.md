@@ -32,20 +32,25 @@ API keys, secret keys, OAuth tokens, and auth credentials are managed by the One
 
 ## Skills
 
-Four types of skills exist in NanoClaw:
+Two skill locations:
 
-- **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
-- **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
-- **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
-- **Runtime skills** — synced into agent session dirs at runtime (`skills/`, `groups/{name}/skills/`)
+- **`.claude/skills/`** — Claude Code skills loaded by the SDK (dev-facing, not shown in `/skills`)
+- **`skills/`** — Runtime skills synced into agent session dirs (shown via `/skills` in Telegram)
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Agent issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/create-agent` | Create a new domain agent from Telegram (runtime skill, not a Claude Code skill) |
+| Location | Skill | Purpose |
+|----------|-------|---------|
+| `.claude/skills/` | `audit-docs` | Verify docs against codebase |
+| `.claude/skills/` | `prompt-optimizer` | Analyze and optimize prompts |
+| `.claude/skills/` | `vibe-code-auditor` | Audit AI-generated code |
+| `skills/` | `add-karpathy-llm-wiki` | Persistent wiki knowledge base |
+| `skills/` | `agent-browser` | Browser automation for agents |
+| `skills/` | `capabilities` | Agent capability docs |
+| `skills/` | `claw` | Run agents from CLI |
+| `skills/` | `context` | Context management |
+| `skills/` | `create-agent` | Create domain agents from Telegram |
+| `skills/` | `skill-creator` | Create and manage skills |
+| `skills/` | `status` | System status reporting |
+| `skills/` | `sync-fleet` | Phone + nix fleet sync |
 
 ## Development
 
@@ -131,7 +136,7 @@ All paths deliver messages with full session context and trigger an immediate re
 - **Service agents** (telegram_main): orchestrator receives an `inject` IPC message, pipes it into the active session or wakes a new one if the agent is idle
 - **Dev agents** (Claude Code sessions): `claude -c -p` via SSH resumes the most recent session; response is returned to the sender
 - Remote hosts use SSH; local agents use direct filesystem writes
-- Config: `data/agents.json` (per-instance, not in git — has `"self"` field for sender identity like `dev@phone`, `dev@nix`)
+- Config: `data/agents.json` (per-instance, not in git — has `"self"` field for sender identity like `phone:dev`, `nix:dev`)
 - CLI wrappers on Termux in `~/bin/` (set `NANOCLAW_DIR`); on nix symlinked directly
 - Code: `send_agent_message`, `list_agents` in `container/agent-runner/src/ipc-mcp-stdio.ts`; `inject` handler in `src/ipc.ts`; wake-up logic in `src/index.ts`
 

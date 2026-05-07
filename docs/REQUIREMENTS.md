@@ -160,9 +160,9 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 - Each user gets a custom setup matching their exact needs
 
 ### Skills
-- `/setup` - Install dependencies, configure channels, start services
-- `/customize` - General-purpose skill for adding capabilities
-- `/update-nanoclaw` - Pull upstream changes, merge with customizations
+- Runtime skills in `skills/` are synced into agent sessions and shown via `/skills` in Telegram
+- Claude Code skills in `.claude/skills/` are loaded by the SDK for dev sessions
+- See `CLAUDE.md` for the full skill inventory
 
 ### Deployment
 - Runs on Linux (systemd or runit)

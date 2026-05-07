@@ -9,14 +9,14 @@ Signet runs as a daemon on `localhost:3850`, backed by SQLite (`~/.agents/memory
 **Scoring**: Hybrid search (vector + FTS keyword, `alpha=0.7`), `top_k=20`, `min_score=0.3`, with `decay_rate=0.95` for recency. A predictor sidecar does Reciprocal Rank Fusion for re-ranking.
 
 **Multi-agent**: Each host (phone, nix) runs its own Signet daemon with two agents:
-- `dev@phone` / `dev@nix` — Claude Code dev sessions
+- `phone:dev` / `nix:dev` — Claude Code dev sessions
 - `telegram_main` — NanoClaw service agent
 
 That's four agents total across two daemons. Memories are scoped by `agent_id`; `read_policy: isolated` prevents cross-agent memory bleed within each daemon. The two daemons do not share a database.
 
 ## Dev Sessions (Claude Code)
 
-Hooks defined in `~/nanoclaw/.claude/settings.json`. All use `--agent-id dev@phone` (or `dev@nix`).
+Hooks defined in `~/nanoclaw/.claude/settings.json`. All use `--agent-id phone:dev` (or `nix:dev`).
 
 | Hook | Trigger | What Happens | Output to Claude |
 |------|---------|--------------|------------------|

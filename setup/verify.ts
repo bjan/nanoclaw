@@ -14,17 +14,11 @@ import Database from 'better-sqlite3';
 import { STORE_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
 import { logger } from '../src/logger.js';
-import {
-  getPlatform,
-  getServiceManager,
-  hasSystemd,
-  isRoot,
-} from './platform.js';
+import { getServiceManager, isRoot } from './platform.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
-  const platform = getPlatform();
   const homeDir = os.homedir();
 
   logger.info('Starting verification');
@@ -33,21 +27,7 @@ export async function run(_args: string[]): Promise<void> {
   let service = 'not_found';
   const mgr = getServiceManager();
 
-  if (mgr === 'launchd') {
-    try {
-      const output = execSync('launchctl list', { encoding: 'utf-8' });
-      if (output.includes('com.nanoclaw')) {
-        // Check if it has a PID (actually running)
-        const line = output.split('\n').find((l) => l.includes('com.nanoclaw'));
-        if (line) {
-          const pidField = line.trim().split(/\s+/)[0];
-          service = pidField !== '-' && pidField ? 'running' : 'stopped';
-        }
-      }
-    } catch {
-      // launchctl not available
-    }
-  } else if (mgr === 'systemd') {
+  if (mgr === 'systemd') {
     const prefix = isRoot() ? 'systemctl' : 'systemctl --user';
     try {
       execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
@@ -82,18 +62,13 @@ export async function run(_args: string[]): Promise<void> {
   }
   logger.info({ service }, 'Service status');
 
-  // 2. Check container runtime
+  // 2. Check container runtime (Docker only — native execution is default)
   let containerRuntime = 'none';
   try {
-    execSync('command -v container', { stdio: 'ignore' });
-    containerRuntime = 'apple-container';
+    execSync('docker info', { stdio: 'ignore' });
+    containerRuntime = 'docker';
   } catch {
-    try {
-      execSync('docker info', { stdio: 'ignore' });
-      containerRuntime = 'docker';
-    } catch {
-      // No runtime
-    }
+    // No runtime
   }
 
   // 3. Check credentials

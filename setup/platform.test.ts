@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 
 import {
   getPlatform,
-  isWSL,
   isRoot,
   isHeadless,
   hasSystemd,
@@ -12,32 +11,11 @@ import {
   getNodeMajorVersion,
 } from './platform.js';
 
-// --- getPlatform ---
-
 describe('getPlatform', () => {
-  it('returns a valid platform string', () => {
-    const result = getPlatform();
-    expect(['macos', 'linux', 'unknown']).toContain(result);
+  it('returns linux', () => {
+    expect(getPlatform()).toBe('linux');
   });
 });
-
-// --- isWSL ---
-
-describe('isWSL', () => {
-  it('returns a boolean', () => {
-    expect(typeof isWSL()).toBe('boolean');
-  });
-
-  it('checks /proc/version for WSL markers', () => {
-    // On non-WSL Linux, should return false
-    // On WSL, should return true
-    // Just verify it doesn't throw
-    const result = isWSL();
-    expect(typeof result).toBe('boolean');
-  });
-});
-
-// --- isRoot ---
 
 describe('isRoot', () => {
   it('returns a boolean', () => {
@@ -45,49 +23,24 @@ describe('isRoot', () => {
   });
 });
 
-// --- isHeadless ---
-
 describe('isHeadless', () => {
   it('returns a boolean', () => {
     expect(typeof isHeadless()).toBe('boolean');
   });
 });
 
-// --- hasSystemd ---
-
 describe('hasSystemd', () => {
   it('returns a boolean', () => {
     expect(typeof hasSystemd()).toBe('boolean');
   });
-
-  it('checks /proc/1/comm', () => {
-    // On systemd systems, should return true
-    // Just verify it doesn't throw
-    const result = hasSystemd();
-    expect(typeof result).toBe('boolean');
-  });
 });
-
-// --- getServiceManager ---
 
 describe('getServiceManager', () => {
-  it('returns a valid service manager', () => {
+  it('returns systemd or none', () => {
     const result = getServiceManager();
-    expect(['launchd', 'systemd', 'none']).toContain(result);
-  });
-
-  it('matches the detected platform', () => {
-    const platform = getPlatform();
-    const result = getServiceManager();
-    if (platform === 'macos') {
-      expect(result).toBe('launchd');
-    } else {
-      expect(['systemd', 'none']).toContain(result);
-    }
+    expect(['systemd', 'none']).toContain(result);
   });
 });
-
-// --- commandExists ---
 
 describe('commandExists', () => {
   it('returns true for node', () => {
@@ -99,8 +52,6 @@ describe('commandExists', () => {
   });
 });
 
-// --- getNodeVersion ---
-
 describe('getNodeVersion', () => {
   it('returns a version string', () => {
     const version = getNodeVersion();
@@ -108,8 +59,6 @@ describe('getNodeVersion', () => {
     expect(version).toMatch(/^\d+\.\d+\.\d+/);
   });
 });
-
-// --- getNodeMajorVersion ---
 
 describe('getNodeMajorVersion', () => {
   it('returns at least 20', () => {

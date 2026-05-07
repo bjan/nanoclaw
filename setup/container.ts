@@ -39,21 +39,21 @@ export async function run(args: string[]): Promise<void> {
     process.exit(4);
   }
 
-  // Validate runtime availability
-  if (runtime === 'apple-container' && !commandExists('container')) {
+  // Validate runtime availability (Docker only)
+  if (runtime !== 'docker') {
     emitStatus('SETUP_CONTAINER', {
       RUNTIME: runtime,
       IMAGE: image,
       BUILD_OK: false,
       TEST_OK: false,
       STATUS: 'failed',
-      ERROR: 'runtime_not_available',
+      ERROR: 'unknown_runtime',
       LOG: 'logs/setup.log',
     });
-    process.exit(2);
+    process.exit(4);
   }
 
-  if (runtime === 'docker') {
+  {
     if (!commandExists('docker')) {
       emitStatus('SETUP_CONTAINER', {
         RUNTIME: runtime,
@@ -82,22 +82,8 @@ export async function run(args: string[]): Promise<void> {
     }
   }
 
-  if (!['apple-container', 'docker'].includes(runtime)) {
-    emitStatus('SETUP_CONTAINER', {
-      RUNTIME: runtime,
-      IMAGE: image,
-      BUILD_OK: false,
-      TEST_OK: false,
-      STATUS: 'failed',
-      ERROR: 'unknown_runtime',
-      LOG: 'logs/setup.log',
-    });
-    process.exit(4);
-  }
-
-  const buildCmd =
-    runtime === 'apple-container' ? 'container build' : 'docker build';
-  const runCmd = runtime === 'apple-container' ? 'container' : 'docker';
+  const buildCmd = 'docker build';
+  const runCmd = 'docker';
 
   // Build
   let buildOk = false;

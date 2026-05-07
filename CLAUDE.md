@@ -70,6 +70,23 @@ sv down nanoclaw    # stop
 
 Quick rebuild shortcut: `./rebuild` (runs tsc + sv restart nanoclaw)
 
+## Git & Fleet Sync
+
+Two hosts run NanoClaw: **phone** (Termux, runit) and **nix** (NixOS, systemd). Both track `main`.
+
+**Before committing:**
+- Run `node node_modules/typescript/bin/tsc --noEmit` to type-check
+- Group related changes into logical commits (e.g., separate refactor from feat from docs)
+- Use conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `docs:`
+
+**Syncing to nix after push:**
+```bash
+ssh nix "cd ~/nanoclaw && git pull --ff-only && node node_modules/typescript/bin/tsc && cd container/agent-runner && node ../../node_modules/typescript/bin/tsc && echo '--- BUILD OK ---'"
+```
+If the service needs restarting on nix: `ssh nix "systemctl --user restart nanoclaw"`
+
+**Common type pitfall:** `TelegramChannelOpts` in `src/channels/telegram.ts` is a separate interface from `ChannelOpts` in `src/channels/registry.ts`. When adding fields to `ChannelOpts`, also add them to `TelegramChannelOpts` if the Telegram channel uses them.
+
 ## Native Execution (no Docker)
 
 Agents run as native Node.js processes — no containers, no Docker. The agent-runner

@@ -9,6 +9,7 @@ export interface ModelConfig {
   id: string; // Model ID sent to the API (e.g. "claude-opus-4-6")
   baseUrl?: string; // Override ANTHROPIC_BASE_URL (undefined = default Anthropic API)
   apiKey?: string; // Override ANTHROPIC_API_KEY (undefined = use OAuth/default)
+  backend?: string; // Agent backend override (e.g. "codex"). Default: "claude-code"
   label: string; // Human-friendly display name
 }
 
@@ -49,6 +50,13 @@ export const MODEL_REGISTRY: Record<string, ModelConfig> = {
   'qwen-mini': { id: `${LOCAL_PROVIDER},qwen3-1.7b`, baseUrl: LOCAL_BASE_URL, apiKey: LOCAL_API_KEY, label: 'Qwen 3 1.7B' },
   'gemma4-uncensored-large': { id: `${LOCAL_PROVIDER},gemma-4-a4b-uncensored`, baseUrl: LOCAL_BASE_URL, apiKey: LOCAL_API_KEY, label: 'Gemma 4 Uncensored Large' },
   'gemma4-uncensored': { id: `${LOCAL_PROVIDER},gemma-4-e4b-uncensored`, baseUrl: LOCAL_BASE_URL, apiKey: LOCAL_API_KEY, label: 'Gemma 4 Uncensored' },
+
+  // Codex models via pct-codex-proxy (ChatGPT OAuth → OpenAI Chat Completions)
+  'gpt-5.5': { id: 'gpt-5.5', backend: 'codex', label: 'GPT-5.5' },
+  'gpt-5.5-high': { id: 'gpt-5.5-high', backend: 'codex', label: 'GPT-5.5 High' },
+  'gpt-5.5-low': { id: 'gpt-5.5-low', backend: 'codex', label: 'GPT-5.5 Low' },
+  'gpt-5.4': { id: 'gpt-5.4', backend: 'codex', label: 'GPT-5.4' },
+  'gpt-5.4-mini': { id: 'gpt-5.4-mini', backend: 'codex', label: 'GPT-5.4 Mini' },
 };
 
 const MODEL_STATE_PREFIX = 'model:';

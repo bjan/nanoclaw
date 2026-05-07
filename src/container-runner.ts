@@ -209,7 +209,14 @@ export async function runContainerAgent(
   // Only override env vars for non-Anthropic models (those with a custom baseUrl).
   // For Anthropic models, let the SDK use its default OAuth flow and model selection.
   const modelConfig = resolveGroupModelConfig(group.folder);
-  if (modelConfig?.baseUrl) {
+  if (modelConfig?.backend === 'codex') {
+    agentEnv.CODEX_MODEL = modelConfig.id;
+    agentEnv.NANOCLAW_BACKEND = 'codex';
+    logger.info(
+      { containerName, model: modelConfig.id, backend: 'codex' },
+      'Model override applied (codex backend)',
+    );
+  } else if (modelConfig?.baseUrl) {
     agentEnv.ANTHROPIC_BASE_URL = modelConfig.baseUrl;
     agentEnv.ANTHROPIC_MODEL = modelConfig.id;
     if (modelConfig.apiKey) {

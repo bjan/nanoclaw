@@ -736,6 +736,9 @@ async function main(): Promise<void> {
       log(`Failed to parse container config: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  if (process.env.NANOCLAW_BACKEND) {
+    containerConfig.backend = process.env.NANOCLAW_BACKEND;
+  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');

@@ -36,6 +36,11 @@ interface ChatCompletionResponse {
     message: ChatMessage;
     finish_reason: string;
   }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
 }
 
 interface McpConnection {
@@ -55,6 +60,8 @@ export class CodexBackend implements AgentBackend {
     const proxyUrl = config.env.CODEX_PROXY_URL || DEFAULT_PROXY_URL;
     const model = config.env.CODEX_MODEL || DEFAULT_MODEL;
     const sessionId = `codex-${Date.now()}`;
+    const contextWindow = parseInt(config.env.NANOCLAW_CONTEXT_WINDOW || '200000', 10);
+    const compactThreshold = Math.floor(contextWindow * 0.8);
 
     yield { type: 'system', subtype: 'init', session_id: sessionId };
 
@@ -155,7 +162,7 @@ export class CodexBackend implements AgentBackend {
 
       const promptText = await this.extractPrompt(config.prompt);
 
-      const messages: ChatMessage[] = [];
+      let messages: ChatMessage[] = [];
       if (config.systemPrompt?.append) {
         messages.push({ role: 'system', content: config.systemPrompt.append });
       }
@@ -188,6 +195,11 @@ export class CodexBackend implements AgentBackend {
               tool_call_id: tc.id,
             });
           }
+
+          if (response.usage && response.usage.prompt_tokens > compactThreshold) {
+            log(`Compacting: ${response.usage.prompt_tokens} tokens > ${compactThreshold} threshold`);
+            messages = this.compactMessages(messages);
+          }
           continue;
         }
 
@@ -206,6 +218,15 @@ export class CodexBackend implements AgentBackend {
         try { await conn.client.close(); } catch { /* ignore */ }
       }
     }
+  }
+
+  private compactMessages(messages: ChatMessage[]): ChatMessage[] {
+    const keepTail = 6;
+    if (messages.length <= 2 + keepTail) return messages;
+    const head = messages.slice(0, 2);
+    const tail = messages.slice(-keepTail);
+    log(`Truncated ${messages.length - 2 - keepTail} messages from middle`);
+    return [...head, { role: 'assistant', content: '[Earlier tool interactions truncated to save context]' }, ...tail];
   }
 
   private async connectMcp(

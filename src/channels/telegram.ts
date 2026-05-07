@@ -458,9 +458,13 @@ export class TelegramChannel implements Channel {
 
       setGroupModel(group.folder, arg);
       this.opts.onModelChange?.(chatJid);
-      ctx.reply(`Model switched to *${MODEL_REGISTRY[arg].label}* (\`${arg}\`)`, {
-        parse_mode: 'Markdown',
-      });
+
+      const newWindow = MODEL_REGISTRY[arg].contextWindow;
+      let reply = `Model switched to *${MODEL_REGISTRY[arg].label}* (\`${arg}\`)`;
+      if (this.opts.hasSession?.(group.folder)) {
+        reply += `\n\nContext window: ${(newWindow / 1000).toFixed(0)}k tokens. Active session may exceed this — run /compact or /new if needed.`;
+      }
+      ctx.reply(reply, { parse_mode: 'Markdown' });
     });
 
     this.bot.command('new', (ctx) => {

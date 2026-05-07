@@ -18,7 +18,7 @@ import {
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import { resolveGroupModelConfig } from './models.js';
+import { getCompactThreshold, resolveGroupModelConfig } from './models.js';
 import { getGroupEffort, isGroupPlanMode, clearGroupPlanMode } from './channels/telegram.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { RegisteredGroup } from './types.js';
@@ -226,6 +226,12 @@ export async function runContainerAgent(
       { containerName, model: modelConfig.id, baseUrl: modelConfig.baseUrl },
       'Model override applied (custom endpoint)',
     );
+  }
+
+  // Apply context-aware compaction threshold from model's contextWindow
+  if (modelConfig) {
+    agentEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(getCompactThreshold(modelConfig));
+    agentEnv.NANOCLAW_CONTEXT_WINDOW = String(modelConfig.contextWindow);
   }
 
   // Apply per-group effort level (set via /effort Telegram command)

@@ -741,6 +741,7 @@ async function main(): Promise<void> {
     onCloseStdin: (chatJid: string) => {
       queue.closeStdin(chatJid);
     },
+    hasSession: (groupFolder: string) => !!sessions[groupFolder],
     registeredGroups: () => registeredGroups,
   };
 

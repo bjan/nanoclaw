@@ -18,9 +18,9 @@ NanoClaw gives you the core functionality without that mess.
 
 The entire codebase should be something you can read and understand. One Node.js process. A handful of source files. No microservices, no message queues, no abstraction layers.
 
-### Security Through True Isolation
+### Security Through Scoping
 
-Instead of application-level permission systems trying to prevent agents from accessing things, agents run in actual Linux containers. The isolation is at the OS level. Agents can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your Mac.
+Instead of complex application-level permission systems, agents are scoped via per-group configuration. Each group can restrict available tools (`allowedTools`), MCP servers, and accessible directories. Agents run as native processes with env-based path isolation.
 
 ### Built for the Individual User
 
@@ -50,7 +50,7 @@ Skills we'd like to see contributed:
 - `/add-signal` - Add Signal as a channel
 - `/add-matrix` - Add Matrix integration
 
-> **Note:** Telegram, Slack, Discord, Gmail, and Apple Container skills already exist. See the [skills documentation](https://docs.nanoclaw.dev/integrations/skills-system) for the full list.
+> **Note:** Telegram, Slack, Discord, and Gmail skills already exist. See the [skills documentation](https://docs.nanoclaw.dev/integrations/skills-system) for the full list.
 
 ---
 
@@ -59,8 +59,8 @@ Skills we'd like to see contributed:
 A personal Claude assistant accessible via messaging, with minimal custom code.
 
 **Core components:**
-- **Claude Agent SDK** as the core agent
-- **Containers** for isolated agent execution (Linux VMs)
+- **Multi-backend agents** — Claude Agent SDK and Codex (OpenAI) via backend abstraction
+- **Native execution** with per-group tool/path restrictions
 - **Multi-channel messaging** (WhatsApp, Telegram, Discord, Slack, Gmail) — add exactly the channels you need
 - **Persistent memory** per conversation and globally
 - **Scheduled tasks** that run Claude and can message back
@@ -92,17 +92,16 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 - Each group maintains a conversation session (via Claude Agent SDK)
 - Sessions auto-compact when context gets too long, preserving critical information
 
-### Container Isolation
-- All agents run inside containers (lightweight Linux VMs)
-- Each agent invocation spawns a container with mounted directories
-- Containers provide filesystem isolation - agents can only see mounted paths
-- Bash access is safe because commands run inside the container, not on the host
-- Browser automation via agent-browser with Chromium in the container
+### Agent Execution
+- Agents run as native Node.js processes (no containers)
+- Backend abstraction supports Claude Code SDK and Codex (OpenAI proxy)
+- Per-group `containerConfig` controls allowed tools, MCP servers, and additional directories
+- Each agent's working directory is scoped to `groups/{name}/`
 
 ### Scheduled Tasks
 - Users can ask Claude to schedule recurring or one-time tasks from any group
 - Tasks run as full agents in the context of the group that created them
-- Tasks have access to all tools including Bash (safe in container)
+- Tasks have access to all tools (restricted by per-group containerConfig)
 - Tasks can optionally send messages to their group via `send_message` tool, or complete silently
 - Task runs are logged to the database with duration and result
 - Schedule types: cron expressions, intervals (ms), or one-time (ISO timestamp)
@@ -128,24 +127,24 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 
 ### Channels
 - WhatsApp (baileys), Telegram (grammy), Discord (discord.js), Slack (@slack/bolt), Gmail (googleapis)
-- Each channel lives in a separate fork repo and is added via skills (e.g., `/add-whatsapp`, `/add-telegram`)
+- Each channel is added via skills (e.g., `/add-whatsapp`, `/add-telegram`)
 - Messages stored in SQLite, polled by router
 - Channels self-register at startup — unconfigured channels are skipped with a warning
 
 ### Scheduler
-- Built-in scheduler runs on the host, spawns containers for task execution
-- Custom `nanoclaw` MCP server (inside container) provides scheduling tools
-- Tools: `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `send_message`
+- Built-in scheduler runs on the host, spawns agent processes for task execution
+- Custom `nanoclaw` MCP server (in agent-runner) provides scheduling and communication tools
+- Tools: `send_chat_message`, `send_agent_message`, `list_agents`, `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `update_task`, `screenshot`, `read_pdf`, `register_group`
 - Tasks stored in SQLite with run history
 - Scheduler loop checks for due tasks every minute
-- Tasks execute Claude Agent SDK in containerized group context
+- Tasks execute via backend abstraction (Claude Code SDK or Codex) in group context
 
 ### Web Access
 - Built-in WebSearch and WebFetch tools
 - Standard Claude Agent SDK capabilities
 
 ### Browser Automation
-- agent-browser CLI with Chromium in container
+- agent-browser CLI with Chromium
 - Snapshot-based interaction with element references (@e1, @e2, etc.)
 - Screenshots, PDFs, video recording
 - Authentication state persistence
@@ -166,7 +165,7 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 - `/update-nanoclaw` - Pull upstream changes, merge with customizations
 
 ### Deployment
-- Runs on macOS (launchd), Linux (systemd), or Windows (WSL2)
+- Runs on Linux (systemd or runit)
 - Single Node.js process handles everything
 
 ---

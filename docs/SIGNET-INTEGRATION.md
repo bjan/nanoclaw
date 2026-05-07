@@ -1,10 +1,10 @@
 # Signet Memory System — Full Integration Overview
 
-*Last updated: 2026-04-26*
+*Last updated: 2026-05-07*
 
 ## Architecture
 
-Signet runs as a daemon on `localhost:3850`, backed by SQLite (`~/.agents/memory/memories.db`) with OpenAI `text-embedding-3-large` for vector search. Memory processing uses a multi-stage pipeline (pipelineV2) with extraction and synthesis via `gpt-5.4-mini` (codex provider). A knowledge graph (entities → aspects → groups → claims → attributes) provides structured relationships between memories.
+Signet runs as a daemon on `localhost:3850`, backed by SQLite (`~/.agents/memory/memories.db`) with OpenAI `text-embedding-3-large` for vector search. Memory processing uses a multi-stage pipeline (pipelineV2) with extraction and synthesis via `gpt-5-codex-mini` (codex provider). A knowledge graph (entities → aspects → groups → claims → attributes) provides structured relationships between memories.
 
 **Scoring**: Hybrid search (vector + FTS keyword, `alpha=0.7`), `top_k=20`, `min_score=0.3`, with `decay_rate=0.95` for recency. A predictor sidecar does Reciprocal Rank Fusion for re-ranking.
 
@@ -26,20 +26,22 @@ Hooks defined in `~/nanoclaw/.claude/settings.json`. All use `--agent-id dev@pho
 | **PostCompact** (20s) | After compaction | 1) Extract summary from transcript → save via `compaction-complete` 2) Re-run `session-start` to re-inject full signet context | Full session-start injection (memory recovery after compaction) |
 | **SessionEnd** (15s) | Session closes | Final checkpoint, aspect weight decay, transcript archival, enqueue async summary extraction job | Async — extraction runs in background |
 
-**Synthesis** (daily cron, 4am UTC): `signet hook synthesis` → renders `renderMemoryProjection()` → writes `.signet/MEMORY.md`. Daemon reads this on next session-start.
+**Synthesis**: `signet hook synthesis` → renders `renderMemoryProjection()` → writes `.signet/MEMORY.md`. Daemon reads this on next session-start. Schedule externally (e.g., cron or systemd timer).
 
 ## NanoClaw Service Agents (telegram_main)
 
-Signet is mounted as an **MCP tool provider** via a filtering proxy (`scripts/mcp/signet-filtered.mjs`). No lifecycle hooks.
+Signet is mounted as an **MCP tool provider** via a filtering proxy (`scripts/mcp/signet-filtered.mjs`), and service agents now also get **SessionStart injection**.
 
 | Aspect | What They Get | What They Don't Get |
 |--------|---------------|---------------------|
 | **Tools** | `memory_store`, `memory_search`, `memory_get`, `memory_list`, `memory_modify`, `memory_forget`, `memory_feedback`, full knowledge graph tools (`knowledge_expand`, `knowledge_tree`, entity/aspect/claim/attribute CRUD) | `agent_peers`, `agent_message_send`, `agent_message_inbox` (blocked by proxy) |
-| **Hooks** | PreCompact only (archives transcript to `groups/{name}/conversations/`) | No SessionStart injection, no UserPromptSubmit matching, no PostCompact recovery, no SessionEnd extraction |
+| **Hooks** | SessionStart (via agent-runner HTTP call), PreCompact (archives transcript to `groups/{name}/conversations/`) | No UserPromptSubmit matching, no PostCompact recovery, no SessionEnd extraction |
 | **Agent ID** | `SIGNET_AGENT_ID` = group folder name (e.g., `telegram_main`) | — |
 | **Memory scope** | Isolated — can only see own memories | Cannot read dev session memories |
 
-**Key gap**: NanoClaw agents must proactively call `memory_search`/`memory_store` — they get no automatic context injection or extraction. Their CLAUDE.md files instruct them to do this, but it's agent-discipline-dependent.
+**SessionStart injection**: Before each fresh query, the agent-runner calls `POST http://127.0.0.1:3850/api/hooks/session-start` with `harness: "nanoclaw"`, `agentId: groupFolder`, and `project: WORKSPACE_GROUP`. The response's `inject` field is appended to the system prompt, giving service agents automatic memory recall at session start — the same quality as dev sessions.
+
+Service agents still benefit from proactive `memory_search`/`memory_store` calls for mid-session recall and storage, but the cold-start gap is closed.
 
 ## Data Flow Diagram
 
@@ -68,16 +70,17 @@ Signet is mounted as an **MCP tool provider** via a filtering proxy (`scripts/mc
     │  Dev Agent   │      │ NanoClaw Agent │
     │(Claude Code) │      │(agent-runner)  │
     │              │      │                │
-    │ 5 hooks:     │      │ MCP tools only:│
+    │ 5 hooks:     │      │ MCP tools:     │
     │ SessionStart │      │ memory_store   │
     │ PromptSubmit │      │ memory_search  │
     │ PreCompact   │      │ knowledge_*    │
     │ PostCompact  │      │ memory_feedback│
     │ SessionEnd   │      │                │
-    │              │      │ 1 hook:        │
-    │ Auto inject  │      │ PreCompact     │
-    │ Auto extract │      │ (transcript    │
-    │ Auto recover │      │  archive only) │
+    │              │      │ 2 hooks:       │
+    │ Auto inject  │      │ SessionStart   │
+    │ Auto extract │      │ (HTTP, inject) │
+    │ Auto recover │      │ PreCompact     │
+    │              │      │ (transcript)   │
     └──────────────┘      └────────────────┘
 ```
 

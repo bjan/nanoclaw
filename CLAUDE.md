@@ -20,7 +20,11 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `skills/` | Global skills synced into agent session dirs at runtime |
-| `container/agent-runner/` | Agent runner: receives input via stdin, runs Claude Agent SDK, outputs via IPC |
+| `container/agent-runner/` | Agent runner: receives input via stdin, runs agent backend, outputs via IPC |
+| `container/agent-runner/src/backend.ts` | Backend abstraction: AgentBackend interface, createBackend() factory |
+| `container/agent-runner/src/backends/` | Backend implementations (claude-code, codex) |
+| `scripts/codex_proxy/` | Codex proxy: translates OpenAI Chat Completions to ChatGPT Responses API |
+| `src/models.ts` | Model registry for /model command (Anthropic, local, codex models) |
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
@@ -28,7 +32,7 @@ API keys, secret keys, OAuth tokens, and auth credentials are managed by the One
 
 ## Skills
 
-Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
+Four types of skills exist in NanoClaw:
 
 - **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
 - **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
@@ -41,6 +45,7 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 | `/customize` | Adding channels, integrations, changing behavior |
 | `/debug` | Agent issues, logs, troubleshooting |
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
+| `/create-agent` | Create a new domain agent from Telegram (guided workflow) |
 
 ## Development
 
@@ -99,7 +104,7 @@ All MCP tools are defined in `container/agent-runner/src/ipc-mcp-stdio.ts` and a
 - `screenshot` — capture phone screen (root screencap + resize). Also `~/bin/screenshot` CLI.
 - `read_pdf` — extract text from local PDFs or URLs (pdftotext). Also `~/bin/pdf-reader` CLI.
 - `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `update_task` — task scheduling
-- `register_group` — register new chat groups (main only)
+- `register_group` — register new chat groups with optional `containerConfig` (main only)
 
 ## Cross-Instance Communication
 
@@ -116,9 +121,12 @@ All paths deliver messages with full session context and trigger an immediate re
 ## Model Switching
 
 Users can switch models per-group via `/model` in Telegram. Model registry is in `src/models.ts`.
-- Anthropic models (opus, sonnet, haiku): use OAuth via settings.json `model` key
+- Anthropic models (opus, sonnet, haiku): use Claude Code SDK via OAuth (`claude-code` backend)
 - Local models (via Claude Code Router): use `ANTHROPIC_BASE_URL`/`ANTHROPIC_MODEL` env vars
 - Model IDs for local models use `llama-swap,<alias>` format to bypass CCR default routing
+- Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini): use `codex` backend via codex-proxy service
+
+When a codex model is selected, `container-runner.ts` sets `CODEX_MODEL` and `NANOCLAW_BACKEND=codex` env vars. The agent-runner's backend factory (`createBackend()` in `container/agent-runner/src/backend.ts`) selects the appropriate backend implementation.
 
 ## Telegram Bot Pool (Agent Swarm)
 
@@ -140,11 +148,25 @@ SignetAI runs as a daemon on `localhost:3850`, providing persistent memory acros
 
 Two agents share the daemon:
 - `default` — Claude Code dev sessions (hooks in `~/.claude/settings.json`)
-- `telegram_main` — NanoClaw Telegram agent (MCP server in agent-runner, `SIGNET_AGENT_ID=telegram_main`)
+- `telegram_main` (and other groups) — NanoClaw service agents (MCP server in agent-runner, `SIGNET_AGENT_ID` set dynamically to group folder name)
 
 Agent-runner mounts `signet-mcp` alongside `nanoclaw` MCP in `container/agent-runner/src/index.ts`. Tools are `mcp__signet__*` (memory_store, memory_recall, memory_search, knowledge graph, etc.).
 
+Service agents get **SessionStart injection** — before each fresh query, the agent-runner calls `POST http://127.0.0.1:3850/api/hooks/session-start` and injects recalled memories into the system prompt. This bridges the gap between dev sessions (full hooks) and service agents (previously MCP-only).
+
 Proactively store anything significant to memory — user preferences, decisions, project context, corrections. When recalling, search before assuming. Memory is cheap; forgetting is expensive.
+
+## Per-Group Agent Configuration (ContainerConfig)
+
+Groups can be configured with per-agent restrictions and capabilities via `containerConfig` (stored as JSON in the `container_config` SQLite column). Fields:
+
+- `allowedTools` — override default tool list (e.g., restrict an agent to read-only tools)
+- `mcpServers` — additional MCP servers merged with the always-present `nanoclaw` + `signet`
+- `additionalMounts` — extra directories symlinked into `groups/{folder}/extra/`
+- `timeout` — custom agent timeout in milliseconds
+- `backend` — agent backend (`claude-code` or `codex`)
+
+Set via `register_group` MCP tool or direct SQLite. The agent-runner reads `container_config.json` from `NANOCLAW_IPC_DIR` at startup.
 
 ## Platform Quirks (Termux/Android)
 

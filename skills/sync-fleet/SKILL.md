@@ -9,7 +9,7 @@ Pull latest code, rebuild, and restart services on both phone and nix hosts.
 
 ## Usage
 
-Run the sync script:
+Run the sync script (installed at `~/bin/sync-fleet` on each host, not included in the repo):
 
 ```bash
 ~/bin/sync-fleet

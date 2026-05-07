@@ -29,6 +29,7 @@ export interface TelegramChannelOpts {
   onModelChange?: (chatJid: string) => void;
   onSessionClear?: (chatJid: string) => void;
   onCloseStdin?: (chatJid: string) => void;
+  hasSession?: (groupFolder: string) => boolean;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 

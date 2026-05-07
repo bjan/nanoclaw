@@ -120,6 +120,7 @@ def parse_sse_response(raw: str) -> dict[str, Any]:
     """Parse SSE stream and extract text content and/or tool calls."""
     output_text_parts: list[str] = []
     tool_calls: dict[str, dict[str, Any]] = {}
+    item_to_call: dict[str, str] = {}  # item_id → call_id
     full_response: dict[str, Any] | None = None
 
     for line in raw.split("\n"):
@@ -144,18 +145,23 @@ def parse_sse_response(raw: str) -> dict[str, Any]:
             item = event.get("item", {})
             if item.get("type") == "function_call":
                 call_id = item.get("call_id", "")
+                item_id = item.get("id", "")
                 tool_calls[call_id] = {
                     "name": item.get("name", ""),
                     "arguments": "",
                 }
+                if item_id:
+                    item_to_call[item_id] = call_id
 
         if event_type == "response.function_call_arguments.delta":
-            call_id = event.get("call_id", "")
+            item_id = event.get("item_id", "")
+            call_id = item_to_call.get(item_id, event.get("call_id", ""))
             if call_id in tool_calls:
                 tool_calls[call_id]["arguments"] += event.get("delta", "")
 
         if event_type == "response.function_call_arguments.done":
-            call_id = event.get("call_id", "")
+            item_id = event.get("item_id", "")
+            call_id = item_to_call.get(item_id, event.get("call_id", ""))
             if call_id in tool_calls:
                 tool_calls[call_id]["arguments"] = event.get("arguments", tool_calls[call_id]["arguments"])
 
@@ -243,6 +249,7 @@ async def sse_to_chat_stream(
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     tool_calls_acc: dict[str, dict[str, Any]] = {}
     tc_index_map: dict[str, int] = {}
+    item_to_call: dict[str, str] = {}
     tc_next_index = 0
 
     async for raw_chunk in sse_stream:
@@ -280,10 +287,13 @@ async def sse_to_chat_stream(
                 item = event.get("item", {})
                 if item.get("type") == "function_call":
                     call_id = item.get("call_id", "")
+                    item_id = item.get("id", "")
                     idx = tc_next_index
                     tc_next_index += 1
                     tc_index_map[call_id] = idx
                     tool_calls_acc[call_id] = {"name": item.get("name", ""), "arguments": ""}
+                    if item_id:
+                        item_to_call[item_id] = call_id
                     chunk = {
                         "id": chunk_id,
                         "object": "chat.completion.chunk",
@@ -305,7 +315,8 @@ async def sse_to_chat_stream(
                     yield f"data: {json.dumps(chunk)}\n\n".encode()
 
             elif event_type == "response.function_call_arguments.delta":
-                call_id = event.get("call_id", "")
+                item_id = event.get("item_id", "")
+                call_id = item_to_call.get(item_id, event.get("call_id", ""))
                 delta = event.get("delta", "")
                 if call_id in tc_index_map and delta:
                     chunk = {
